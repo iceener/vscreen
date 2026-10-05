@@ -72,6 +72,10 @@ input.addEventListener('input', () => {
 </script></body></html>
 """
 
+/// Content size of the `--web 1` window and its gap under the main fixture window.
+let webContentSize = NSSize(width: 420, height: 160)
+let webGap: CGFloat = 20
+
 @MainActor
 final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKScriptMessageHandler {
     let options: FixtureOptions
@@ -115,6 +119,14 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKScr
         let primaryHeight = CGDisplayBounds(CGMainDisplayID()).height
         let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
         let cgTopLeft = CGPoint(x: display.minX + options.x, y: display.minY + options.y)
+        // Every fixture window on --display stays inside it, so none shows on Adam's screen.
+        var extent = CGRect(origin: cgTopLeft, size: frameSize)
+        if options.web {
+            extent.size.height += webGap + window.frameRect(forContentRect: NSRect(origin: .zero, size: webContentSize)).height
+        }
+        guard display.contains(extent) else {
+            fail("window_outside_display", "--x/--y put the window at \(extent), outside display \(options.display) \(display)")
+        }
         window.setFrameOrigin(NSPoint(x: cgTopLeft.x, y: primaryHeight - cgTopLeft.y - frameSize.height))
         window.orderBack(nil)
         self.window = window
@@ -165,7 +177,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKScr
     /// A WKWebView window under the main fixture window, on the same display, ordered back.
     /// The page has an input and a button with HTML ids and aria-labels, as in a Tauri app.
     func makeWebWindow(below topLeft: CGPoint, height: CGFloat) -> NSWindow {
-        let size = NSSize(width: 420, height: 160)
+        let size = webContentSize
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.add(self, name: "fixture")
         let webView = WKWebView(frame: NSRect(origin: .zero, size: size), configuration: configuration)
@@ -178,7 +190,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKScr
         window.contentView = webView
         let primaryHeight = CGDisplayBounds(CGMainDisplayID()).height
         let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
-        let webTop = topLeft.y + height + 20
+        let webTop = topLeft.y + height + webGap
         window.setFrameOrigin(NSPoint(x: topLeft.x, y: primaryHeight - webTop - frameSize.height))
         window.orderBack(nil)
         return window

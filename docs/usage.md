@@ -50,10 +50,20 @@ Screen & System Audio Recording. Other commands never prompt.
 | `vscreen type --pid P (--path PATH \| --match TERMS) [--window ID] --text T [--mode value\|keys]` | value: set AXValue (replaces the text). keys: focus the element inside its app, then post Unicode key events to that pid only; fails with keys_not_routable when the app's focused element is another element. |
 | `vscreen key --pid P --key NAME [--mods cmd,shift,alt,ctrl] [--path PATH \| --match TERMS]` | Post one key (return, tab, escape, delete, arrows, a-z, 0-9, ...) to that pid only, to its focused element; with an element, focus it first and fail with keys_not_routable if focus stays elsewhere. |
 | `vscreen shot [--display virtual\|ID \| --window ID] -o FILE.png [--scale 1\|2] [--allow-main]` | Save a PNG of the virtual display (default) or one window. A target outside the virtual display needs --allow-main. |
-| `vscreen record [--display virtual\|ID \| --window ID] -o FILE.mov --duration SECONDS [--fps N] [--allow-main]` | Record a movie (H.264, no audio). Returns when the file is finalized; SIGINT/SIGTERM stop it early and cleanly. |
+| `vscreen record [--display virtual\|ID \| --window ID] -o FILE.mov --duration SECONDS [--fps N] [--allow-main]` | Record a movie (H.264, no audio). Returns when the file is finalized; SIGINT/SIGTERM/SIGHUP stop it early and cleanly. |
 
 `display start` returns the running display when one exists (`"alreadyRunning":true`).
-`--origin X,Y` is a global position in points (top-left origin, main display at 0,0).
+`--origin X,Y` is a global position in points (top-left origin, main display at 0,0); `0,0` is
+refused because it would make the virtual display the main display.
+`display start` and `display stop` run one at a time (a lock in `~/Library/Application Support/vscreen/`);
+one waiting longer than 40 s fails with `display_busy`. Only one daemon can hold a display: a second one
+exits before it creates a display (`daemon_already_running`). A daemon failure reaches the caller with the
+daemon's own code (`virtual_display_failed`, `display_mirrored`, `display_became_main`, ...); `status` of
+a stale daemon shows it under `failure`. The daemon is identified by pid, process name and process
+start time. When its pid is alive but cannot be identified, `status` reports `daemonUnidentified:true`
+and `start`/`stop` fail with `daemon_unidentified` and keep the state file.
+The daemon watches display reconfiguration (sleep/wake, reconnects): if the virtual display becomes
+mirrored or main, it puts Adam's display back as main, or exits and removes the virtual display.
 
 ## Windows and elements
 

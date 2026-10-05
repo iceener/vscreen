@@ -1,7 +1,8 @@
 #!/bin/bash
 # Smoke check of the installed vscreen: doctor, display start/status, the fixture window on
 # the virtual display, display stop. Records the frontmost app before and after and fails if
-# it changed. Leaves the virtual display stopped.
+# it changed. Stops the display only if this run started it; a display another job started
+# (`alreadyRunning:true`) stays up.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,10 +15,11 @@ field() { plutil -extract "$1" raw -o - - ; }
 front() { "$VS" doctor | field frontmostApp.bundleId; }
 
 FIXTURE_PID=""
+OWN_DISPLAY=0
 EVENTS="$(mktemp)"
 cleanup() {
   [ -n "$FIXTURE_PID" ] && kill "$FIXTURE_PID" 2>/dev/null || true
-  "$VS" display stop >/dev/null || true
+  if [ "$OWN_DISPLAY" = 1 ]; then "$VS" display stop >/dev/null || true; fi
   rm -f "$EVENTS"
 }
 trap cleanup EXIT
@@ -27,6 +29,7 @@ echo "doctor: $("$VS" doctor)"
 
 START="$("$VS" display start)"
 echo "start: $START"
+if [ "$(echo "$START" | field alreadyRunning)" = "false" ]; then OWN_DISPLAY=1; fi
 DISPLAY_ID="$(echo "$START" | field displayID)"
 echo "status: $("$VS" display status)"
 
@@ -44,7 +47,12 @@ MID="$(front)"
 
 kill "$FIXTURE_PID"
 FIXTURE_PID=""
-echo "stop: $("$VS" display stop)"
+if [ "$OWN_DISPLAY" = 1 ]; then
+  echo "stop: $("$VS" display stop)"
+  OWN_DISPLAY=0
+else
+  echo "stop: skipped, the display ran before this smoke run"
+fi
 echo "status: $("$VS" display status)"
 AFTER="$(front)"
 

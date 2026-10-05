@@ -26,7 +26,7 @@ let commandList: [(usage: String, summary: String)] = [
     ("vscreen shot [--display virtual|ID | --window ID] -o FILE.png [--scale 1|2] [--allow-main]",
      "Save a PNG of the virtual display (default) or one window. A target outside the virtual display needs --allow-main."),
     ("vscreen record [--display virtual|ID | --window ID] -o FILE.mov --duration SECONDS [--fps N] [--allow-main]",
-     "Record a movie (H.264, no audio). Returns when the file is finalized; SIGINT/SIGTERM stop it early and cleanly."),
+     "Record a movie (H.264, no audio). Returns when the file is finalized; SIGINT/SIGTERM/SIGHUP stop it early and cleanly."),
 ]
 
 /// Parsed `--name value` options and `--flag` switches after the command words.
@@ -110,12 +110,14 @@ func route(_ arguments: [String]) throws -> JSONObject {
     throw CLIError("unknown_command", "unknown command: \(arguments.joined(separator: " ")); run `vscreen help`")
 }
 
-let arguments = Array(CommandLine.arguments.dropFirst())
+var arguments = Array(CommandLine.arguments.dropFirst())
 if arguments.first == daemonCommand {
     runDisplayDaemon(Array(arguments.dropFirst()))
 }
+let reexecuted = arguments.first == reexecMarker
+if reexecuted { arguments.removeFirst() }
 if !["help", "--help", "-h"].contains(arguments.first ?? "help") {
-    runAsOwnResponsibleProcess(arguments)
+    runAsOwnResponsibleProcess(arguments, reexecuted: reexecuted)
 }
 do {
     emitSuccess(try route(arguments))
