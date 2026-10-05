@@ -23,6 +23,7 @@
 
 - `F002-window-ax-control` (PLANNED): window list/move, AX tree, click/type; after F001's identity lands.
 - `F003-capture` (PLANNED): shot/record of the virtual display or a window; parallel with F002.
+- `F004-run-on-virtual-display-alice-proof` (PLANNED): `vscreen run` plus the Alice native proof and hook note; after F002 and F003.
 
 ## PROVEN
 
