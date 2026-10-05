@@ -45,11 +45,30 @@ struct DisplayConfig {
     }
 }
 
-/// Bottom-right corner of the main display: the virtual display touches it at one point only,
+/// The display Adam works on: the main display, or (if the virtual display took over main)
+/// the first other online display.
+func userDisplay(excluding virtualID: CGDirectDisplayID) -> CGDirectDisplayID {
+    let main = CGMainDisplayID()
+    if main != virtualID { return main }
+    return onlineDisplays().first { $0 != virtualID } ?? main
+}
+
+/// Bottom-right corner of Adam's display: the virtual display touches it at one point only,
 /// away from the top-left hot corner and the bottom Dock edge.
-func defaultOrigin() -> CGPoint {
-    let main = CGDisplayBounds(CGMainDisplayID())
-    return CGPoint(x: main.maxX, y: main.maxY)
+func defaultOrigin(next userDisplay: CGDirectDisplayID) -> CGPoint {
+    let bounds = CGDisplayBounds(userDisplay)
+    return CGPoint(x: bounds.maxX, y: bounds.maxY)
+}
+
+/// Runs one display configuration transaction for the login session.
+func configureDisplays(_ body: (CGDisplayConfigRef?) -> CGError) -> CGError {
+    var configRef: CGDisplayConfigRef?
+    var error = CGBeginDisplayConfiguration(&configRef)
+    guard error == .success else { return error }
+    error = body(configRef)
+    if error == .success { return CGCompleteDisplayConfiguration(configRef, .forSession) }
+    CGCancelDisplayConfiguration(configRef)
+    return error
 }
 
 func onlineDisplays() -> [CGDirectDisplayID] {
@@ -193,12 +212,15 @@ final class DisplayDaemon {
         descriptor.name = "vscreen"
         descriptor.maxPixelsWide = UInt32(config.width * scale)
         descriptor.maxPixelsHigh = UInt32(config.height * scale)
-        // About 218 pixels per inch, like Apple's Retina panels.
-        descriptor.sizeInMillimeters = CGSize(width: Double(config.width * scale) / 218 * 25.4,
-                                              height: Double(config.height * scale) / 218 * 25.4)
+        // A physical size derived from pixels made a 1280x800 non-HiDPI display claim 149 mm,
+        // and macOS 26.5 then mirrored Adam's display onto it. A fixed monitor-like width avoids that.
+        descriptor.sizeInMillimeters = CGSize(width: 600, height: 600 * Double(config.height) / Double(config.width))
+        // macOS remembers settings (mirroring, origin) per identity: vendor, product, serial.
+        // Each size/HiDPI combination gets its own serial so an identity never changes mode.
+        // productID 1 identities were remembered as mirrored during development; do not reuse it.
         descriptor.vendorID = 0x7673 // "vs"
-        descriptor.productID = 0x0001
-        descriptor.serialNum = 0x0001
+        descriptor.productID = 0x0002
+        descriptor.serialNum = UInt32(config.width << 13 | config.height << 1 | (config.hiDPI ? 1 : 0))
         descriptor.terminationHandler = { _, _ in
             logLine("virtual display terminated by the system; exiting")
             removeState(ownedBy: getpid())
@@ -216,15 +238,28 @@ final class DisplayDaemon {
         self.display = display
         let id = display.displayID
         guard waitUntil(seconds: 5, { onlineDisplays().contains(id) }) else {
-            throw CLIError("virtual_display_failed", "display \(id) did not come online within 5s")
+            throw CLIError("virtual_display_failed",
+                           "display \(id) (serial \(descriptor.serialNum)) was created but did not come online within 5s")
         }
 
-        let requested = config.origin ?? defaultOrigin()
-        var configRef: CGDisplayConfigRef?
-        var error = CGBeginDisplayConfiguration(&configRef)
-        if error == .success { error = CGConfigureDisplayOrigin(configRef, id, Int32(requested.x), Int32(requested.y)) }
-        if error == .success { error = CGCompleteDisplayConfiguration(configRef, .forSession) }
-        else { CGCancelDisplayConfiguration(configRef) }
+        // Safety net: never leave Adam's display mirrored or the virtual display as main.
+        let user = userDisplay(excluding: id)
+        let mirroredOnArrival = CGDisplayIsInMirrorSet(id) != 0 || CGMainDisplayID() == id
+        if mirroredOnArrival {
+            logLine("display \(id) came online mirrored or as main; unmirroring and restoring display \(user) as main")
+            let error = configureDisplays { configRef in
+                var error = CGConfigureDisplayMirrorOfDisplay(configRef, id, kCGNullDirectDisplay)
+                if error == .success { error = CGConfigureDisplayMirrorOfDisplay(configRef, user, kCGNullDirectDisplay) }
+                if error == .success { error = CGConfigureDisplayOrigin(configRef, user, 0, 0) }
+                return error
+            }
+            guard waitUntil(seconds: 5, { CGDisplayIsInMirrorSet(id) == 0 && CGMainDisplayID() == user }) else {
+                throw CLIError("display_mirrored", "display \(id) stayed mirrored or main (configure error \(error.rawValue))")
+            }
+        }
+
+        let requested = config.origin ?? defaultOrigin(next: user)
+        let error = configureDisplays { CGConfigureDisplayOrigin($0, id, Int32(requested.x), Int32(requested.y)) }
         _ = waitUntil(seconds: 2, { CGDisplayBounds(id).origin == requested })
         let frame = CGDisplayBounds(id)
         logLine("display \(id) online; requested origin \(requested), configure error \(error.rawValue), frame \(frame)")
@@ -238,6 +273,7 @@ final class DisplayDaemon {
                 "requestedOrigin": ["x": Double(requested.x), "y": Double(requested.y)],
                 "configureError": Int(error.rawValue),
                 "accepted": frame.origin == requested,
+                "mirroredOnArrival": mirroredOnArrival,
                 "frame": rectJSON(frame),
             ],
         ])
