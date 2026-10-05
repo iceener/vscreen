@@ -16,12 +16,11 @@
 
 ## TRACK
 
-- vscreen: hidden virtual display plus focus-free window control for agents on macOS 26.5; private API risk reported plainly.
+- vscreen: hidden virtual display plus focus-free window control for agents on macOS 26.5; private API risk reported plainly. Public at https://github.com/iceener/vscreen.
 
 ## NOW
 
-- `F001-vscreen-core-display` (ACTIVE): on main; repair of review-1 findings (start/stop lock, origin and main/mirror guard, daemon identity, smoke and fixture bounds) next.
-- `F002-window-ax-control` (ACTIVE): on main; independent review 1 next.
+- Nothing active.
 
 ## NEXT
 
@@ -29,5 +28,7 @@
 
 ## PROVEN
 
+- `F002-window-ax-control` (PROVEN): window list/move, AX tree, allow-listed click, value typing without activating the app; review 1 repaired and live-checked on the fixture.
+- `F001-vscreen-core-display` (PROVEN): signed bundle with its own TCC identity, daemon-held virtual display at the bottom-right corner; review 1 repaired (locks, main/mirror guard and watchdog, daemon identity).
 - `F004-alice-native-proof` (PROVEN): Alice native chat-panels scenario passed on the virtual display, Slack frontmost in all 701 samples, lab window never on Adam's screen; spec/features/done/2026-10/F004-alice-native-proof/.
 - `F003-capture` (PROVEN): shot/record of one window on the virtual display or of the virtual display; a target is required and the main screen is refused (manual double unlock only). Any capture can raise macOS's "bypass the private window picker" alert until Adam clicks Allow once (then about monthly).

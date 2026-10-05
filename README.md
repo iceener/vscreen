@@ -85,5 +85,5 @@ The other commands do not show permission dialogs. `vscreen doctor` shows the pe
 
 - The virtual display uses `CGVirtualDisplay`. This is a private macOS API. A macOS update can stop it. If this occurs, use a dummy HDMI plug to get a second display.
 - `type --mode keys` works only when the target element already has the focus in its app. In other cases, use `type --mode value` or `click`.
-- `click --post` sends mouse events to the app. This can make the app active. Do not use it when the focus is important.
+- `click --post` sends mouse events to the app. This can make the app active. vscreen refuses it unless you also give `--allow-activation-risk`.
 - Windows on other Spaces can be missing from the Accessibility data. `window move` then fails.
