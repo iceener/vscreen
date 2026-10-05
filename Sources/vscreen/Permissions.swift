@@ -81,9 +81,19 @@ func runAsOwnResponsibleProcess(_ arguments: [String]) {
     } catch {
         emitFailure(CLIError("spawn_failed", "\(error)"))
     }
+    // The wrapper outlives the child: forward SIGINT/SIGTERM so the child (e.g. `record`) stops cleanly.
+    let forwarders = [SIGINT, SIGTERM].map { number in
+        Darwin.signal(number, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+        source.setEventHandler { kill(pid, number) }
+        source.resume()
+        return source
+    }
     var status: Int32 = 0
-    while waitpid(pid, &status, 0) == -1 {
-        if errno != EINTR { emitFailure(CLIError("spawn_failed", "waitpid: \(String(cString: strerror(errno)))")) }
+    withExtendedLifetime(forwarders) {
+        while waitpid(pid, &status, 0) == -1 {
+            if errno != EINTR { emitFailure(CLIError("spawn_failed", "waitpid: \(String(cString: strerror(errno)))")) }
+        }
     }
     let signal = status & 0x7f
     exit(signal == 0 ? (status >> 8) & 0xff : 128 + signal)
