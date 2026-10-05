@@ -20,3 +20,8 @@
 
 - Proof run: Alice lab exits 0 with `result.json` `status:"passed"`; vscreen JSON shows the lab window on the virtual display, frontmost app unchanged before, during, and after; the mid-run shot shows the Alice window.
 - Any time the window spent on the main display is reported in ms, not hidden.
+
+## Notes
+
+- The lab window exists hidden for a while before `orderFrontRegardless`. Check with the fixture whether an ordered-out window is reachable (AX `AXWindows`, or `CGWindowListCopyWindowInfo` with all windows) before reveal; if so, `vscreen run` can position it first and the main display never shows it.
+- Whether tao's launch-time `activateIgnoringOtherApps(YES)` still takes focus under macOS 26 cooperative activation is open; the frontmost samples answer it. If it does, that is an Alice note, not a vscreen workaround that re-activates Adam's app.
