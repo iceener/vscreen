@@ -87,3 +87,47 @@ smoke ok
 - Display state: `readState()` / `displayStatus()` in `Display.swift`. The state file is `~/Library/Application Support/vscreen/display.json`.
 - Non-prompting permission checks: `permissionState()` in `Permissions.swift`.
 - `frontmostAppJSON()` is in doctor output for focus checks.
+
+## Repair 1
+
+Fixes for `review-1.md` (the review that accepted F001 with fixes). Code commit `35d9860`, record SIGHUP and notes in the next commit.
+
+| # | Finding | Fix |
+| --- | --- | --- |
+| 1 | Concurrent start orphans a daemon | `display start` and `display stop` hold an exclusive flock on `display-control.lock` for their whole run (40 s wait, then `display_busy`). The daemon takes `display-daemon.lock` (2 s retry) before `CGVirtualDisplay(descriptor:)`, holds it for life, and exits with `daemon_already_running` if it is held. |
+| 2 | `--origin` can make the display main | `--origin 0,0` is refused (`bad_arguments`). After placement the daemon checks main and mirror state and exits with `display_became_main`, which releases the display. |
+| 3 | Identity lost after reinstall | State stores `pidStart` (`pbi_start_tvsec/usec` from `PROC_PIDTBSDINFO`). The daemon is `ours` when name is `vscreen` and the start time matches; `gone` when the pid is dead or another process has it; `unidentified` when the process is alive but its info cannot be read. For `unidentified`, `status` reports `daemonUnidentified:true` and `start`/`stop` fail with `daemon_unidentified` and keep the state file. State without `pidStart` (older daemons) falls back to the name check. |
+| 4 | Safety net guesses Adam's display | The daemon records `CGMainDisplayID()` before it creates the display and restores that id (stored as `userDisplayID`). `userDisplay(excluding:)` is gone. |
+| 5 | Caller deadline shorter than daemon worst case | Caller waits 30 s; daemon worst case is 2 + 5 + 5 + 2 = 14 s. |
+| 6 | No watchdog | `CGDisplayRegisterReconfigurationCallback` in the daemon; a burst of callbacks is coalesced into one check 0.5 s later. If the display is mirrored or main, the daemon runs the same unmirror + restore as at startup; if that fails in 5 s, it records `display_mirrored`, removes state, and exits (the display goes away). |
+| 7 | Re-exec env guard leaks; no SIGHUP | Guard is `responsibility_get_pid_responsible_for_pid(getpid()) == getpid()`. `VSCREEN_RESPONSIBLE` is removed; the child gets the parent's environment unchanged. A hidden argv marker (`__responsible`) stops a re-exec loop if the disclaim ever fails (`spawn_failed`); argv does not leak to grandchildren. The wrapper forwards SIGINT, SIGTERM, SIGHUP. `record` now also stops cleanly on SIGHUP. |
+| 8 | Hardened runtime | Done before this repair (`f74e68f`). |
+| 9a | Key left on disk | `create_identity` uses an EXIT trap with the path expanded at set time, removes `$tmp` itself on success, then clears the trap. |
+| 9b | Empty search list | All three `list-keychains -s` calls use `${a[@]+"${a[@]}"}`. |
+| 9c | Two sign.sh runs interleave | Not fixed (not in this repair's scope). |
+| 9d | Partial creation | If the keychain exists but `cert.pem` is missing, `sign.sh` reads it back with `security find-certificate -c "$CN" -p`; if that fails it stops with a message to move the signing dir away. |
+| 9e | Passwords in argv | Not fixed (not in this repair's scope). |
+| 10 | smoke.sh stops another job's display | `smoke.sh` stops the display only when its `start` returned `alreadyRunning:false`. |
+| 11 | Fixture window can land off its display | The fixture fails with `window_outside_display` before ordering any window when the main window (plus the web window under it, with `--web 1`) is not inside `CGDisplayBounds(--display)`. |
+| 12 | Daemon error code lost | The daemon writes `display-failure.json` (`pid`, `code`, `message`, `at`) on every failure exit. `start` returns that code; without a record it reports exit code or "killed by signal N". `status` of a stale daemon shows `failure`. |
+
+### Live checks (installed `/tmp/vscreen-F001r/bin/vscreen`, macOS 26.5)
+
+Frontmost app (lsappinfo) was Slack before and after every check except the record check (see below).
+
+- `doctor`: `selfResponsible:true`, certificate-based requirement, both permissions true. `VSCREEN_RESPONSIBLE=1 vscreen doctor` still re-execs (`selfResponsible:true`). `vscreen __responsible doctor` run from a terminal fails with `spawn_failed` instead of looping.
+- Concurrent start: four `display start` in parallel from a stopped state. Result: one daemon (pid 81159), one virtual display (id 57, frame 3008,1692 1920x1200); one call returned `alreadyRunning:false`, three `true`, all with the same pid and display id.
+- Reinstall under a running daemon: `install.sh` replaced the bundle; `lsof` showed the daemon running from the deleted `.vscreen.app.old.*` executable. `status` still `running:true`, `start` returned `alreadyRunning:true`, no second daemon.
+- Daemon lock: a Python `flock(LOCK_EX|LOCK_NB)` probe saw the lock held. With `display.json` moved aside, `display start` spawned a daemon that exited with `daemon_already_running`, and the caller returned that code; display count stayed 2, one daemon.
+- Start/stop race: three rounds of `stop` and `start` in parallel. Every round ended consistent (no daemon and 1 display with `running:false`, or one daemon and 2 displays with `running:true`).
+- `smoke.sh` with the display already running: `stop: skipped`, display still running after. `smoke.sh` from a stopped state: started display 60, fixture ready on it with `appActive:false`, stopped it; `smoke ok` both times, frontmost Slack before/during/after.
+- Fixture: `--x -3000 --y -1700`, `--x 1600 --y 40`, `--x 40 --y 1100`, and `--y 900 --web 1` all failed with `window_outside_display`; no fixture process left.
+- `--origin 0,0` and `--origin ' 0, 0'`: `bad_arguments`, no daemon spawned.
+- Identity: state with a live `sleep` pid and no `pidStart` → `stale:true`, `stop` cleared it and did not kill `sleep`. State with pid 1 (launchd, info not readable) → `daemonUnidentified:true`; `stop` failed with `daemon_unidentified` and kept the state file (removed by hand afterwards).
+- SIGHUP: `record --duration 20` on the virtual display, `kill -HUP` to the wrapper pid only. Wrapper exit 0, JSON `stoppedBy:"SIGHUP"`, child gone, movie written.
+
+**Focus incident in the record check.** At stream start, replayd showed ScreenCaptureKit's periodic re-approval alert for vscreen (`SCAlertStatsManager requireAlert` → `SCAlert userAcknowledgementAlert`, via UserNotificationCenter). Frontmost became UserNotificationCenter. A click 3 s later dismissed it (`user acknowledgement refused` in the replayd log); Slack was frontmost again and `doctor` still reports `screenRecording:true`. This is macOS behaviour of any `shot`/`record` once the re-approval interval passes, not code from this repair. It can break the focus rule for capture work and needs an owner decision.
+
+**Not exercised live:** the mirror/main recovery at startup, the post-placement `display_became_main` exit, and the watchdog. Triggering them needs a mirrored or main virtual display, which the job rules forbid.
+
+End state: display stopped, no daemon, no fixture process.

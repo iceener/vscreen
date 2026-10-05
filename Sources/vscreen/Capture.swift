@@ -198,16 +198,16 @@ func shot(_ arguments: [String]) throws -> JSONObject {
 
 // MARK: - record
 
-/// Resolves once with the first stop reason: the duration timer or SIGINT/SIGTERM.
+/// Resolves once with the first stop reason: the duration timer or SIGINT/SIGTERM/SIGHUP.
 private final class StopGate: @unchecked Sendable {
     private let lock = NSLock()
     private var reason: String?
     private var waiter: CheckedContinuation<String, Never>?
     private var sources: [DispatchSourceSignal] = []
 
-    /// Installs SIGINT/SIGTERM handlers before capture starts, so a signal always stops cleanly.
+    /// Installs SIGINT/SIGTERM/SIGHUP handlers before capture starts, so a signal always stops cleanly.
     init() {
-        for (number, name) in [(SIGINT, "SIGINT"), (SIGTERM, "SIGTERM")] {
+        for (number, name) in [(SIGINT, "SIGINT"), (SIGTERM, "SIGTERM"), (SIGHUP, "SIGHUP")] {
             signal(number, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
             source.setEventHandler { [weak self] in self?.stop(name) }
