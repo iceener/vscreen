@@ -43,9 +43,36 @@ Screen & System Audio Recording. Other commands never prompt.
 | `vscreen display start [--width N] [--height N] [--no-hidpi] [--origin X,Y]` | Create the virtual display in a background daemon. Default 1920x1200 points, HiDPI, touching the main display only at its bottom-right corner. |
 | `vscreen display status` | Show whether the daemon runs and the display is online, with its frame. |
 | `vscreen display stop` | Stop the daemon and remove the virtual display. |
+| `vscreen shot [--display virtual\|ID \| --window ID] -o FILE.png [--scale 1\|2] [--allow-main]` | Save a PNG of the virtual display (default) or one window. A target outside the virtual display needs --allow-main. |
+| `vscreen record [--display virtual\|ID \| --window ID] -o FILE.mov --duration SECONDS [--fps N] [--allow-main]` | Record a movie (H.264, no audio). Returns when the file is finalized; SIGINT/SIGTERM stop it early and cleanly. |
 
 `display start` returns the running display when one exists (`"alreadyRunning":true`).
 `--origin X,Y` is a global position in points (top-left origin, main display at 0,0).
+
+### Capture
+
+`shot` and `record` use ScreenCaptureKit and need Screen Recording; without it they fail with
+`permission_missing` and never prompt. The default target is the virtual display. When it is
+not running they fail with `display_not_running`; they never fall back to the main display.
+
+- `--display ID` other than the virtual display, and `--window ID` whose frame is not fully
+  inside the virtual display, fail with `outside_virtual_display` unless `--allow-main` is passed.
+  Window IDs are CGWindowIDs.
+- `--scale` defaults to the target's backing scale: a HiDPI 1920x1200 display gives a
+  3840x2400 PNG, `--scale 1` gives 1920x1200. A window gives its frame size times the scale.
+  The cursor is not captured.
+- `record` writes H.264 `.mov` at the backing scale, `--fps` 1–60 (default 30), `--duration` up
+  to 3600 s. It replaces an existing file. The result reports `duration` (of the written movie),
+  `elapsed`, and `stoppedBy` (`duration`, `SIGINT`, or `SIGTERM`).
+- While a window is recorded, macOS draws a "shared" badge in place of its title-bar buttons;
+  the badge is in the movie.
+
+```sh
+vscreen shot -o display.png
+# {"ok":true,"path":".../display.png","pixels":{"width":3840,"height":2400},"scale":2,
+#  "target":{"kind":"display","displayID":55,"virtual":true,"frame":{...}}}
+vscreen record --window 174621 -o window.mov --duration 3
+```
 
 ## Files
 
