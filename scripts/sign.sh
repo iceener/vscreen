@@ -71,7 +71,7 @@ EOF
 if [ ! -f "$CERT" ]; then
   security find-certificate -c "$CN" -p "$KC" > "$CERT.tmp" 2>/dev/null && [ -s "$CERT.tmp" ] || {
     rm -f "$CERT.tmp"
-    echo "sign.sh: $KC has no '$CN' certificate; move $DIR away and run again (Adam then grants permissions again)" >&2
+    echo "sign.sh: $KC has no '$CN' certificate; move $DIR away and run again (permissions must then be granted again)" >&2
     exit 1
   }
   mv "$CERT.tmp" "$CERT"
@@ -91,7 +91,7 @@ security list-keychains -d user -s ${SAVED[@]+"${SAVED[@]}"} "$KC"
 
 # Hardened runtime: without the audio-input entitlement, tccd denies ScreenCaptureKit's microphone
 # queries for vscreen outright instead of leaving them undetermined (a possible prompt).
-# It also blocks DYLD_* injection into the identity that holds Adam's grants.
+# It also blocks DYLD_* injection into the identity that holds the Accessibility and Screen Recording grants.
 args=(--force --sign "$HASH" --keychain "$KC" --timestamp=none --options runtime)
 [ -n "$IDENT" ] && args+=(--identifier "$IDENT")
 codesign "${args[@]}" "$TARGET"

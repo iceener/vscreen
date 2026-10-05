@@ -23,10 +23,10 @@ let commandList: [(usage: String, summary: String)] = [
      "value: set AXValue (replaces the text). keys: focus the element inside its app, then post Unicode key events to that pid only; fails with keys_not_routable when the app's focused element is another element."),
     ("vscreen key --pid P --key NAME [--mods cmd,shift,alt,ctrl] [--path PATH | --match TERMS]",
      "Post one key (return, tab, escape, delete, arrows, a-z, 0-9, ...) to that pid only, to its focused element; with an element, focus it first and fail with keys_not_routable if focus stays elsewhere."),
-    ("vscreen shot [--display virtual|ID | --window ID] -o FILE.png [--scale 1|2] [--allow-main]",
-     "Save a PNG of the virtual display (default) or one window. A target outside the virtual display needs --allow-main."),
-    ("vscreen record [--display virtual|ID | --window ID] -o FILE.mov --duration SECONDS [--fps N] [--allow-main]",
-     "Record a movie (H.264, no audio). Returns when the file is finalized; SIGINT/SIGTERM/SIGHUP stop it early and cleanly."),
+    ("vscreen shot (--window ID | --pid P | --title TEXT | --display virtual) -o FILE.png [--scale 1|2]",
+     "Save a PNG of one window on the virtual display (preferred) or of the virtual display. A target is required. The main screen is refused (outside_virtual_display)."),
+    ("vscreen record (--window ID | --pid P | --title TEXT | --display virtual) -o FILE.mov --duration SECONDS [--fps N]",
+     "Record a movie (H.264, no audio) of one window on the virtual display or of the virtual display. Same target rules as shot. Returns when the file is finalized; SIGINT/SIGTERM/SIGHUP stop it early and cleanly."),
 ]
 
 /// Parsed `--name value` options and `--flag` switches after the command words.

@@ -1,12 +1,14 @@
 #!/bin/bash
 # Proof: Alice's native chat-panels scenario runs with its lab window on the vscreen virtual display
-# while Adam's frontmost app stays in front.
+# while the user's frontmost app stays in front.
 #
 #   ALICE_WT=<Alice checkout with the ALICE_LAB_WINDOW_ORIGIN hook> scripts/proof-alice-chat-panels.sh
 #
 # Evidence goes to proof/<stamp>/: frontmost.tsv (sampled every 0.2 s), windows.jsonl (the lab window's
-# frame and display over time), paired shots of the virtual display and the main display taken at the
-# same moment mid-scenario, the scenario log, and summary.json with the verdict. Exit 0 only on PASS.
+# frame and display over time), paired evidence taken at the same moment mid-scenario (a shot of the
+# virtual display, a shot of the lab window only, and a window-list check that no lab window is on the
+# main display), the scenario log, and summary.json with the verdict. Exit 0 only on PASS.
+# Rule: this script never captures the main display; every image is the virtual display or the lab window.
 set -uo pipefail
 
 ALICE="${ALICE_WT:?set ALICE_WT to an Alice checkout with the ALICE_LAB_WINDOW_ORIGIN hook}"
@@ -59,7 +61,8 @@ print(json.dumps([{k: w.get(k) for k in ("id", "onScreen", "display", "frame")} 
   done ) >> "$OUT/windows.jsonl" &
 WATCHER=$!
 
-# Paired shots: the virtual display and the main display at the same moment.
+# Paired evidence at the same moment: the virtual display, the lab window alone, and a window-list check
+# (no image) that the lab has no window on the main display.
 ( first=""; n=0
   until [ -n "$first" ]; do
     [ -e "$OUT/.lab-on-virtual" ] && first=$(date +%s)
@@ -67,11 +70,17 @@ WATCHER=$!
   done
   for at in $SHOT_AT; do
     while [ $(( $(date +%s) - first )) -lt "$at" ]; do sleep 0.5; done
-    [ -n "$(lab_pid)" ] || break
+    pid="$(lab_pid)"
+    [ -n "$pid" ] || break
+    wid="$("$VS" window list --pid "$pid" --display virtual | python3 -c '
+import json, sys
+ws = [w for w in json.load(sys.stdin).get("windows", []) if w.get("onScreen") and (w.get("frame") or {}).get("height", 0) > 100]
+print(max(ws, key=lambda w: w["frame"]["width"] * w["frame"]["height"])["id"] if ws else "")')"
     n=$((n + 1))
     t="$(now_ms)"
     "$VS" shot --display virtual -o "$OUT/shot-$n-a-virtual.png" > "$OUT/shot-$n-a.json" &
-    "$VS" shot --display "$MAIN_ID" --allow-main -o "$OUT/shot-$n-b-main.png" > "$OUT/shot-$n-b.json" &
+    [ -n "$wid" ] && "$VS" shot --window "$wid" -o "$OUT/shot-$n-b-lab-window.png" > "$OUT/shot-$n-b.json" &
+    "$VS" window list --pid "$pid" --display main > "$OUT/main-check-$n.json" &
     wait
     printf '%s\tshot-%s\t%s\n' "$t" "$n" "$(front)" >> "$OUT/shots.tsv"
   done ) &
@@ -105,8 +114,15 @@ windows = [json.loads(l) for l in open(os.path.join(out, "windows.jsonl")) if l.
 off_virtual = [w for w in windows for x in w["windows"] if x.get("onScreen") and x.get("display") != vid]
 on_virtual = [w for w in windows for x in w["windows"] if x.get("onScreen") and x.get("display") == vid]
 shots = sorted(f for f in os.listdir(out) if f.startswith("shot-") and f.endswith(".png"))
+main_checks = {}
+for f in sorted(os.listdir(out)):
+    if f.startswith("main-check-") and f.endswith(".json"):
+        try: ws = json.load(open(os.path.join(out, f))).get("windows", [])
+        except Exception: ws = None
+        main_checks[f] = None if ws is None else len([w for w in ws if w.get("onScreen")])
+main_clean = bool(main_checks) and all(v == 0 for v in main_checks.values())
 summary = {
-    "verdict": "PASS" if code == 0 and not lab_front and not off_virtual and on_virtual and shots else "FAIL",
+    "verdict": "PASS" if code == 0 and not lab_front and not off_virtual and on_virtual and shots and main_clean else "FAIL",
     "scenarioExit": code,
     "durationSeconds": round((end - start) / 1000, 1),
     "virtualDisplay": vid,
@@ -127,6 +143,7 @@ summary = {
         "onVirtualDisplay": bool(on_virtual),
     },
     "shots": shots,
+    "labWindowsOnMainDisplayAtShots": main_checks,
 }
 json.dump(summary, open(os.path.join(out, "summary.json"), "w"), indent=2)
 print(json.dumps(summary, indent=2))

@@ -5,13 +5,17 @@ import ImageIO
 import ScreenCaptureKit
 import UniformTypeIdentifiers
 
-// `vscreen shot` and `vscreen record`: PNG or movie of the virtual display or one window.
-// Any target outside the virtual display needs --allow-main, so an agent never captures
-// Adam's screen by accident.
+// `vscreen shot` and `vscreen record`: PNG or movie of one window on the virtual display, or of the
+// virtual display itself. Product rule, enforced here: a target is required (no implicit default), and
+// the main screen is never captured. Any other display, and any window not fully inside the virtual
+// display, is refused before ScreenCaptureKit is touched. Only a person can unlock it, with both
+// --allow-main and VSCREEN_ALLOW_MAIN=1.
 
+private let allowMainEnv = "VSCREEN_ALLOW_MAIN"
 private let captureFlagOptions: Set<String> = ["--allow-main"]
-private let shotValueOptions: Set<String> = ["--display", "--window", "-o", "--scale"]
-private let recordValueOptions: Set<String> = ["--display", "--window", "-o", "--duration", "--fps"]
+private let shotValueOptions: Set<String> = ["--display", "--window", "--pid", "--title", "-o", "--scale"]
+private let recordValueOptions: Set<String> = ["--display", "--window", "--pid", "--title", "-o", "--duration", "--fps"]
+private let targetOptions = ["--window", "--pid", "--title", "--display"]
 
 /// What to capture, parsed and checked against the virtual display before any ScreenCaptureKit call.
 private struct CaptureRequest: Sendable {
@@ -24,38 +28,102 @@ private struct CaptureRequest: Sendable {
     let allowMain: Bool
     /// The running, online virtual display, if any.
     let virtualDisplayID: CGDirectDisplayID?
+    /// Windows that matched --pid/--title (the largest is captured).
+    let matchCount: Int?
 
     init(_ options: Options) throws {
-        allowMain = options.has("--allow-main")
+        // Main-screen capture is a manual, human-only unlock: both the flag and the environment.
+        let flag = options.has("--allow-main")
+        let env = ProcessInfo.processInfo.environment[allowMainEnv] == "1"
+        if flag && !env {
+            throw CLIError("main_unlock_incomplete",
+                           "--allow-main also needs \(allowMainEnv)=1 in the environment; main-screen capture is a manual unlock for a person, never for an agent")
+        }
+        allowMain = flag && env
         let status = displayStatus()
         if status["running"] as? Bool == true, let id = status["displayID"] as? Int {
             virtualDisplayID = CGDirectDisplayID(id)
         } else {
             virtualDisplayID = nil
         }
-        switch (options.string("--display"), options.string("--window")) {
-        case (.some, .some):
-            throw CLIError("bad_arguments", "pass either --display or --window, not both")
-        case (nil, .some(let raw)):
-            guard let id = CGWindowID(raw) else { throw CLIError("bad_arguments", "--window must be a CGWindowID") }
+        let given = targetOptions.filter { options.string($0) != nil }
+        guard given.count == 1 else {
+            throw CLIError(given.isEmpty ? "target_required" : "bad_arguments",
+                           "name exactly one target: --window ID, --pid P, --title TEXT (a window on the virtual display) or --display virtual")
+        }
+        switch given[0] {
+        case "--window":
+            guard let id = CGWindowID(options.string("--window") ?? "") else {
+                throw CLIError("bad_arguments", "--window must be a CGWindowID")
+            }
+            if !allowMain {
+                // Window-server bounds, so the refusal happens before any ScreenCaptureKit call.
+                guard let bounds = windowBounds(id) else {
+                    throw CLIError("window_not_found", "window \(id) does not exist")
+                }
+                guard let virtualDisplayID, CGDisplayBounds(virtualDisplayID).contains(bounds) else {
+                    throw refusal("window \(id) at \(describe(bounds)) is not inside the virtual display")
+                }
+            }
             target = .window(id)
-        case (let raw, nil):
-            if raw == nil || raw == "virtual" {
+            matchCount = nil
+        case "--pid", "--title":
+            let pid: Int?
+            if let raw = options.string("--pid") {
+                guard let value = Int(raw), value > 0 else { throw CLIError("bad_arguments", "--pid must be a process id") }
+                pid = value
+            } else {
+                pid = nil
+            }
+            let title = options.string("--title")
+            let matches = onScreenWindows().filter { window in
+                (pid == nil || window.pid == pid) && (title == nil || window.title.localizedCaseInsensitiveContains(title!))
+            }
+            guard !matches.isEmpty else {
+                throw CLIError("window_not_found", "no on-screen window matches \(pid.map { "pid \($0)" } ?? "title \"\(title!)\"")")
+            }
+            let virtualBounds = virtualDisplayID.map { CGDisplayBounds($0) }
+            let allowed = allowMain ? matches : matches.filter { window in
+                virtualBounds?.contains(window.bounds) ?? false
+            }
+            guard let chosen = allowed.max(by: { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }) else {
+                throw refusal("the matching window is not inside the virtual display (move it there with `vscreen window move`)")
+            }
+            target = .window(chosen.id)
+            matchCount = allowed.count
+        default:
+            let raw = options.string("--display") ?? ""
+            if raw == "virtual" {
                 guard let virtualDisplayID else {
                     throw CLIError("display_not_running", "the virtual display is not running; run `vscreen display start`")
                 }
                 target = .display(virtualDisplayID)
             } else {
-                guard let raw, let id = CGDirectDisplayID(raw) else {
+                guard let id = raw == "main" ? CGMainDisplayID() : CGDirectDisplayID(raw) else {
                     throw CLIError("bad_arguments", "--display must be `virtual` or a display ID")
                 }
                 if id != virtualDisplayID && !allowMain {
-                    throw CLIError("outside_virtual_display",
-                                   "display \(id) is not the virtual display; pass --allow-main to capture it")
+                    throw refusal("display \(id) is not the virtual display")
                 }
                 target = .display(id)
             }
+            matchCount = nil
         }
+    }
+}
+
+/// On-screen, layer-0 windows from the window server (no ScreenCaptureKit call).
+private func onScreenWindows() -> [(id: CGWindowID, pid: Int, title: String, bounds: CGRect)] {
+    guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+        return []
+    }
+    return info.compactMap { entry in
+        guard (entry[kCGWindowLayer as String] as? Int) == 0,
+              let id = entry[kCGWindowNumber as String] as? Int,
+              let pid = entry[kCGWindowOwnerPID as String] as? Int,
+              let raw = entry[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: raw) else { return nil }
+        return (CGWindowID(id), pid, entry[kCGWindowName as String] as? String ?? "", bounds)
     }
 }
 
@@ -84,6 +152,7 @@ private func resolve(_ request: CaptureRequest) async throws -> ResolvedTarget {
                 "displayID": Int(id),
                 "virtual": id == request.virtualDisplayID,
                 "frame": rectJSON(display.frame),
+                "hint": "prefer --window ID or --pid P when the target window is known",
             ])
     case .window(let id):
         guard let window = content.windows.first(where: { $0.windowID == id }) else {
@@ -91,8 +160,7 @@ private func resolve(_ request: CaptureRequest) async throws -> ResolvedTarget {
         }
         let onVirtual = request.virtualDisplayID.map { CGDisplayBounds($0).contains(window.frame) } ?? false
         if !onVirtual && !request.allowMain {
-            throw CLIError("outside_virtual_display",
-                           "window \(id) at \(describe(window.frame)) is not inside the virtual display; pass --allow-main to capture it")
+            throw refusal("window \(id) at \(describe(window.frame)) is not inside the virtual display")
         }
         var json: JSONObject = [
             "kind": "window",
@@ -101,12 +169,27 @@ private func resolve(_ request: CaptureRequest) async throws -> ResolvedTarget {
             "frame": rectJSON(window.frame),
             "title": window.title ?? "",
         ]
+        if let matchCount = request.matchCount { json["matchCount"] = matchCount }
         if let app = window.owningApplication {
             json["pid"] = Int(app.processID)
             json["bundleId"] = app.bundleIdentifier
         }
         return ResolvedTarget(filter: SCContentFilter(desktopIndependentWindow: window), json: json)
     }
+}
+
+private func refusal(_ what: String) -> CLIError {
+    CLIError("outside_virtual_display",
+             "\(what). vscreen captures only a window on the virtual display or the virtual display itself, never the main screen. Only a person can unlock it: --allow-main together with \(allowMainEnv)=1.")
+}
+
+/// Global bounds (points, top-left origin) of a window from the window server, or nil if it does not exist.
+private func windowBounds(_ id: CGWindowID) -> CGRect? {
+    guard let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]],
+          let entry = info.first(where: { ($0[kCGWindowNumber as String] as? Int) == Int(id) }),
+          let raw = entry[kCGWindowBounds as String] as? NSDictionary,
+          let bounds = CGRect(dictionaryRepresentation: raw) else { return nil }
+    return bounds
 }
 
 // MARK: - Shared helpers

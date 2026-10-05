@@ -37,7 +37,7 @@ macOS adds one alert of its own: on a `shot` or `record`, ScreenCaptureKit may a
 vscreen may "bypass the system private window picker". It comes to the front. Click Allow; macOS
 then stays quiet for a long while (about a month) before asking again. If it is refused, it comes
 back on a later capture. To take it at a time that suits you, run a capture yourself:
-`vscreen display start && vscreen shot -o /tmp/vscreen-check.png`.
+`vscreen display start && vscreen shot --display virtual -o /tmp/vscreen-check.png`.
 
 ## Commands
 
@@ -55,8 +55,8 @@ back on a later capture. To take it at a time that suits you, run a capture your
 | `vscreen click --pid P (--path PATH \| --match TERMS) [--window ID] [--action AXPress \| --post]` | Perform an AX action on the element (default AXPress). --post sends mouse down/up at its centre to that pid only; the cursor does not move. |
 | `vscreen type --pid P (--path PATH \| --match TERMS) [--window ID] --text T [--mode value\|keys]` | value: set AXValue (replaces the text). keys: focus the element inside its app, then post Unicode key events to that pid only; fails with keys_not_routable when the app's focused element is another element. |
 | `vscreen key --pid P --key NAME [--mods cmd,shift,alt,ctrl] [--path PATH \| --match TERMS]` | Post one key (return, tab, escape, delete, arrows, a-z, 0-9, ...) to that pid only, to its focused element; with an element, focus it first and fail with keys_not_routable if focus stays elsewhere. |
-| `vscreen shot [--display virtual\|ID \| --window ID] -o FILE.png [--scale 1\|2] [--allow-main]` | Save a PNG of the virtual display (default) or one window. A target outside the virtual display needs --allow-main. |
-| `vscreen record [--display virtual\|ID \| --window ID] -o FILE.mov --duration SECONDS [--fps N] [--allow-main]` | Record a movie (H.264, no audio). Returns when the file is finalized; SIGINT/SIGTERM/SIGHUP stop it early and cleanly. |
+| `vscreen shot (--window ID \| --pid P \| --title TEXT \| --display virtual) -o FILE.png [--scale 1\|2]` | Save a PNG of one window on the virtual display (preferred) or of the virtual display. A target is required. The main screen is refused (outside_virtual_display). |
+| `vscreen record (--window ID \| --pid P \| --title TEXT \| --display virtual) -o FILE.mov --duration SECONDS [--fps N]` | Record a movie (H.264, no audio) of one window on the virtual display or of the virtual display. Same target rules as shot. Returns when the file is finalized; SIGINT/SIGTERM/SIGHUP stop it early and cleanly. |
 
 `display start` returns the running display when one exists (`"alreadyRunning":true`).
 `--origin X,Y` is a global position in points (top-left origin, main display at 0,0); `0,0` is
@@ -69,7 +69,7 @@ a stale daemon shows it under `failure`. The daemon is identified by pid, proces
 start time. When its pid is alive but cannot be identified, `status` reports `daemonUnidentified:true`
 and `start`/`stop` fail with `daemon_unidentified` and keep the state file.
 The daemon watches display reconfiguration (sleep/wake, reconnects): if the virtual display becomes
-mirrored or main, it puts Adam's display back as main, or exits and removes the virtual display.
+mirrored or main, it puts the user's display back as main, or exits and removes the virtual display.
 
 ## Windows and elements
 
@@ -115,13 +115,23 @@ frontmost:
 
 ## Capture
 
-`shot` and `record` use ScreenCaptureKit and need Screen Recording; without it they fail with
-`permission_missing` and never prompt. The default target is the virtual display. When it is
-not running they fail with `display_not_running`; they never fall back to the main display.
+**Product rule: vscreen never captures the user's main screen.** The tool enforces it; no flag an
+agent can pass alone and no agent policy bypasses it.
 
-- `--display ID` other than the virtual display, and `--window ID` whose frame is not fully
-  inside the virtual display, fail with `outside_virtual_display` unless `--allow-main` is passed.
-  Window IDs are CGWindowIDs.
+- A target is required: `--window ID`, `--pid P` or `--title TEXT` (one window on the virtual
+  display), or `--display virtual`. Without one the command fails with `target_required`.
+- Prefer a window target when the window is known; a whole-display capture says so in `hint`.
+  `--pid` and `--title` pick the largest on-screen window inside the virtual display that matches
+  (`matchCount` reports how many matched). Window IDs are CGWindowIDs.
+- Any other display (`--display main`, a display ID) and any window not fully inside the virtual
+  display fail with `outside_virtual_display` before ScreenCaptureKit is called. Nothing is written.
+- Only a person can unlock main-screen capture, with both `--allow-main` and the environment
+  variable `VSCREEN_ALLOW_MAIN=1`. `--allow-main` alone fails with `main_unlock_incomplete`.
+
+`shot` and `record` use ScreenCaptureKit and need Screen Recording; without it they fail with
+`permission_missing` and never prompt. When the virtual display is not running they fail with
+`display_not_running`; they never fall back to the main display.
+
 - `--scale` defaults to the target's backing scale: a HiDPI 1920x1200 display gives a
   3840x2400 PNG, `--scale 1` gives 1920x1200. A window gives its frame size times the scale.
   The cursor is not captured.
@@ -132,9 +142,10 @@ not running they fail with `display_not_running`; they never fall back to the ma
   the badge is in the movie.
 
 ```sh
-vscreen shot -o display.png
-# {"ok":true,"path":".../display.png","pixels":{"width":3840,"height":2400},"scale":2,
-#  "target":{"kind":"display","displayID":55,"virtual":true,"frame":{...}}}
+vscreen shot --pid 4242 -o window.png
+# {"ok":true,"path":".../window.png","pixels":{"width":1760,"height":1200},"scale":2,
+#  "target":{"kind":"window","windowID":174621,"pid":4242,"onVirtualDisplay":true,"matchCount":1,...}}
+vscreen shot --display virtual -o display.png
 vscreen record --window 174621 -o window.mov --duration 3
 ```
 
