@@ -14,5 +14,9 @@ let package = Package(
             dependencies: ["CPrivate"],
             path: "Sources/vscreen"
         ),
+        .executableTarget(
+            name: "vscreen-fixture",
+            path: "Sources/vscreen-fixture"
+        ),
     ]
 )

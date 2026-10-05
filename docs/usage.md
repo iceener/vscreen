@@ -51,3 +51,17 @@ Screen & System Audio Recording. Other commands never prompt.
 
 - State: `~/Library/Application Support/vscreen/display.json` (daemon pid, display id, placement).
 - Daemon log: `~/Library/Logs/vscreen/daemon.log`.
+
+## Test fixture and smoke check
+
+`swift build --product vscreen-fixture` builds a small AppKit app for tests. It opens one
+window (text field `fixture.text`, button `fixture.button`, label `fixture.label`) on the
+given display without activating itself, and prints events as JSON lines:
+
+```sh
+vscreen-fixture --display <displayID> [--x N] [--y N] [--title T] [--exit-after SECONDS]
+```
+
+It refuses the main display and exits after 600 s by default.
+`scripts/smoke.sh` runs doctor, display start/status, the fixture on the virtual display, and
+display stop, and fails if the frontmost app changed.
