@@ -22,6 +22,7 @@
 ## NOW
 
 - `F006-display-cleanup` (ACTIVE): group of two Sol teams (tight fix in the daemon vs observe-then-delete); no orphan virtual display after stop, crash, SIGHUP or logout; doctor reports and clears orphans.
+- `F007-limen-extension-optional` (ACTIVE): the committed pi/omp limen stubs load nothing when limen is absent, so contributors and CI can start pi/omp in this repo.
 
 ## NEXT
 
