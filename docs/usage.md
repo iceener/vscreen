@@ -31,7 +31,13 @@ vscreen permissions request
 ```
 
 Then allow vscreen in System Settings > Privacy & Security > Accessibility, and in
-Screen & System Audio Recording. Other commands never prompt.
+Screen & System Audio Recording. vscreen's own checks never prompt.
+
+macOS adds one alert of its own: on a `shot` or `record`, ScreenCaptureKit may ask whether
+vscreen may "bypass the system private window picker". It comes to the front. Click Allow; macOS
+then stays quiet for a long while (about a month) before asking again. If it is refused, it comes
+back on a later capture. To take it at a time that suits you, run a capture yourself:
+`vscreen display start && vscreen shot -o /tmp/vscreen-check.png`.
 
 ## Commands
 

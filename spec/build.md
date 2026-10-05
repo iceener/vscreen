@@ -29,4 +29,4 @@
 ## PROVEN
 
 - `F004-alice-native-proof` (PROVEN): Alice native chat-panels scenario passed on the virtual display, Slack frontmost in all 701 samples, lab window never on Adam's screen; spec/features/done/2026-10/F004-alice-native-proof/.
-- `F003-capture` (PROVEN): shot/record of the virtual display or one window, `--allow-main` for anything else; hardened-runtime signing keeps ScreenCaptureKit's microphone check silent (f74e68f).
+- `F003-capture` (PROVEN): shot/record of the virtual display or one window, `--allow-main` for anything else. Any capture can raise macOS's "bypass the private window picker" alert until Adam clicks Allow once (then about monthly).
