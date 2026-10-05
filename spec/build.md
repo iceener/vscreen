@@ -22,7 +22,6 @@
 ## NOW
 
 - `F006-display-cleanup` (ACTIVE): group of two Sol teams (tight fix in the daemon vs observe-then-delete); no orphan virtual display after stop, crash, SIGHUP or logout; doctor reports and clears orphans.
-- `F007-limen-extension-optional` (ACTIVE): the committed pi/omp limen stubs load nothing when limen is absent, so contributors and CI can start pi/omp in this repo.
 
 ## NEXT
 
@@ -30,6 +29,7 @@
 
 ## PROVEN
 
+- `F007-limen-extension-optional` (PROVEN): pi and omp start in this repo without limen; the committed limen stubs load nothing when limen is absent and all hooks when it is present.
 - `F002-window-ax-control` (PROVEN): window list/move, AX tree, allow-listed click, value typing without activating the app; review 1 repaired and live-checked on the fixture.
 - `F001-vscreen-core-display` (PROVEN): signed bundle with its own TCC identity, daemon-held virtual display at the bottom-right corner; review 1 repaired (locks, main/mirror guard and watchdog, daemon identity).
 - `F004-alice-native-proof` (PROVEN): Alice native chat-panels scenario passed on the virtual display, Slack frontmost in all 701 samples, lab window never on Adam's screen; spec/features/done/2026-10/F004-alice-native-proof/.

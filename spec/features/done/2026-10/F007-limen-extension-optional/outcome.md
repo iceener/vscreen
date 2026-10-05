@@ -1,0 +1,3 @@
+# Outcome
+
+`pi` and `omp` now start in the vscreen repo on a machine without limen. The committed project stubs (`.pi/extensions/limen.ts`, `.omp/extensions/limen.ts`) load nothing when `LIMEN_PACKAGE` is unset or empty and no `limen` is on PATH; with limen present they load the wake, communication, steering and group-peer hooks as before. Landed on `main` as merge 95d7cab (of b3156f6). Checked: with PATH stripped of limen, both stubs resolve with 0 hook registrations, `pi -p` reaches the model call instead of "Failed to load extension", and `omp -p` no longer prints the load error; with limen on PATH or `LIMEN_PACKAGE` set, both stubs register the hooks. The absent case is silent by design; `notes.md` holds the exact checks.
