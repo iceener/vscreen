@@ -73,6 +73,9 @@ restore_search_list() { security list-keychains -d user -s "${SAVED[@]}"; }
 trap restore_search_list EXIT
 security list-keychains -d user -s "${SAVED[@]}" "$KC"
 
-args=(--force --sign "$HASH" --keychain "$KC" --timestamp=none)
+# Hardened runtime: without the audio-input entitlement, macOS 26 ScreenCaptureKit's microphone
+# check is denied outright instead of showing a "vscreen would like to access the microphone" dialog.
+# It also blocks DYLD_* injection into the identity that holds Adam's grants.
+args=(--force --sign "$HASH" --keychain "$KC" --timestamp=none --options runtime)
 [ -n "$IDENT" ] && args+=(--identifier "$IDENT")
 codesign "${args[@]}" "$TARGET"

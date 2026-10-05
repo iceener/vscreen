@@ -19,13 +19,14 @@
 
 ## NOW
 
-- `F001-vscreen-core-display` (ACTIVE): landed on `vscreen-dev` at efc5522; Adam granted Accessibility and Screen Recording; independent review 1 running.
-- `F002-window-ax-control` (ACTIVE): window list/move, AX tree, click/type against the fixture on the virtual display.
-- `F003-capture` (ACTIVE): shot/record of the virtual display or one window; parallel with F002.
+- `F001-vscreen-core-display` (ACTIVE): on `vscreen-dev`; review 1 accept-with-fixes filed; repairs deferred until after the Alice proof (owner, 12:37).
+- `F002-window-ax-control` (ACTIVE): on `vscreen-dev`; independent review after the proof.
+- `F003-capture` (ACTIVE): on `vscreen-dev`; signing now uses the hardened runtime so ScreenCaptureKit's microphone check is denied without a dialog.
+- `F004-alice-native-proof` (ACTIVE): Alice native chat-panels scenario on the virtual display with paired shots and frontmost sampling; Alice hook as a note only.
 
 ## NEXT
 
-- `F004-run-on-virtual-display-alice-proof` (PLANNED): `vscreen run` plus the Alice native proof and hook note; after F002 and F003.
+- `F005-vscreen-run` (PLANNED): `vscreen run -- CMD` moves any test's windows onto the virtual display; after the proof.
 
 ## PROVEN
 
