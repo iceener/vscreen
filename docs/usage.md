@@ -4,7 +4,9 @@
 on it without taking focus from the person at the Mac.
 
 Every command prints one JSON object on stdout: `{"ok":true,...}` on success, or
-`{"ok":false,"error":{"code":"...","message":"..."}}` with exit code 1.
+`{"ok":false,"error":{"code":"...","message":"..."}}` with exit code 1. When a command fails
+after it already changed something, `error.details` reports what happened (the same fields a
+success would carry).
 
 ## Install
 
@@ -50,11 +52,11 @@ back on a later capture. To take it at a time that suits you, run a capture your
 | `vscreen display status` | Show whether the daemon runs and the display is online, with its frame. |
 | `vscreen display stop` | Stop the daemon and remove the virtual display. |
 | `vscreen window list [--pid P] [--app NAME] [--bundle ID] [--display virtual\|main\|ID] [--all-layers]` | List windows front to back: id (CGWindowID), pid, app, bundle id, title, frame, display, layer, on-screen, order. Layer 0 only unless --all-layers. |
-| `vscreen window move --window ID [--to virtual\|main\|DISPLAYID] [--x X --y Y] [--fit]` | Move a window by AXPosition to X,Y points from the target display's top-left (default virtual, 40,40). --fit shrinks it to stay inside the display. Never raises or activates. |
+| `vscreen window move --window ID [--to virtual\|main\|DISPLAYID] [--x X --y Y] [--fit]` | Move a window by AXPosition to X,Y points from the target display's top-left (default virtual, 40,40; must be inside the display). --fit shrinks it to stay inside the display. Never raises, activates, or unminimizes; fails with window_minimized or not_arrived. |
 | `vscreen tree --pid P [--window ID] [--depth N] [--max-nodes N]` | Accessibility tree of the app's windows as JSON: path, role, title, value, description (aria-label), identifier, domIdentifier, frame, actions, children. |
-| `vscreen click --pid P (--path PATH \| --match TERMS) [--window ID] [--action AXPress \| --post]` | Perform an AX action on the element (default AXPress). --post sends mouse down/up at its centre to that pid only; the cursor does not move. |
-| `vscreen type --pid P (--path PATH \| --match TERMS) [--window ID] --text T [--mode value\|keys]` | value: set AXValue (replaces the text). keys: focus the element inside its app, then post Unicode key events to that pid only; fails with keys_not_routable when the app's focused element is another element. |
-| `vscreen key --pid P --key NAME [--mods cmd,shift,alt,ctrl] [--path PATH \| --match TERMS]` | Post one key (return, tab, escape, delete, arrows, a-z, 0-9, ...) to that pid only, to its focused element; with an element, focus it first and fail with keys_not_routable if focus stays elsewhere. |
+| `vscreen click --pid P (--path PATH \| --match TERMS) [--window ID] [--action NAME \| --post --allow-activation-risk]` | Perform an AX action on the element: AXPress (default), AXConfirm, AXIncrement, AXDecrement, AXPick, or AXCancel; others (AXRaise, AXShowMenu) fail with action_not_allowed. --post sends mouse down/up at its centre to that pid only without moving the cursor; it may activate the app, so it needs --allow-activation-risk. |
+| `vscreen type --pid P (--path PATH \| --match TERMS) [--window ID] --text T [--mode value\|keys]` | value: set AXValue (replaces the text); fails with value_not_set or ax_failed when it does not take. keys: focus the element inside its app, then post Unicode key events to that pid only; fails with keys_not_routable when the app's focused element is another element, refuses control characters (use key), and fails with keys_no_effect when the value did not change. A window or sheet is never a target. |
+| `vscreen key --pid P --key NAME [--mods cmd,shift,alt,ctrl] [--path PATH \| --match TERMS] [--window ID]` | Post one key (return, tab, escape, delete, arrows, a-z, 0-9, ...) to that pid only, to its focused element; with an element, focus it first and fail with keys_not_routable if focus stays elsewhere. Without an element it fails with target_frontmost when the app is frontmost. |
 | `vscreen shot (--window ID \| --pid P \| --title TEXT \| --display virtual) -o FILE.png [--scale 1\|2]` | Save a PNG of one window on the virtual display (preferred) or of the virtual display. A target is required. The main screen is refused (outside_virtual_display). |
 | `vscreen record (--window ID \| --pid P \| --title TEXT \| --display virtual) -o FILE.mov --duration SECONDS [--fps N]` | Record a movie (H.264, no audio) of one window on the virtual display or of the virtual display. Same target rules as shot. Returns when the file is finalized; SIGINT/SIGTERM/SIGHUP stop it early and cleanly. |
 
@@ -74,12 +76,17 @@ mirrored or main, it puts the user's display back as main, or exits and removes 
 ## Windows and elements
 
 All window and element commands need Accessibility (except `window list`) and fail with
-`permission_missing` without it. They never activate an app, raise a window, set
-`AXMain`/`AXFrontmost`, move the cursor, or post to a global event tap.
+`permission_missing` without it. They never raise a window, set `AXMain`/`AXFrontmost`, write
+`AXFocused` to a window or sheet, move the cursor, or post to a global event tap. They never
+activate an app, with one exception: `click --post` may, and runs only with
+`--allow-activation-risk`.
 
 - **Window ids** are CGWindowIDs from `window list`. `window move` finds the AX window by
-  `_AXUIElementGetWindow`, else by an identical frame (`axWindowMatch`). A window on another
-  Space may be missing from the app's AX windows; the move then fails with `ax_window_not_found`.
+  `_AXUIElementGetWindow`, else by an identical frame among the app's AX windows that have no
+  id (`axWindowMatch`). A window on another Space may be missing from the app's AX windows; the
+  move then fails with `ax_window_not_found`. A minimized window fails with `window_minimized`
+  (vscreen does not unminimize it). When the window does not end up on the target display, the
+  move fails with `not_arrived`; `error.details.window` shows where it is.
 - **Paths** come from `tree`: `w<CGWindowID>` for a window, then child indices in AXChildren
   order, e.g. `w174779/0`. A window without an id is `n<index in AXWindows>`. A path is stable
   while the window's element structure does not change.
@@ -87,7 +94,8 @@ All window and element commands need Accessibility (except `window list`) and fa
   contains); all terms must hold, and values cannot contain commas. Keys: `role`, `subrole`,
   `title`, `id` (AXIdentifier or HTML id via AXDOMIdentifier), `label` (AXDescription, which is
   the aria-label in web content, or AXTitle), `value`, `placeholder`, `class` (one HTML class).
-  The search is depth-first; the first match is used and `matchCount` reports how many matched.
+  The search starts below each window, so a window itself never matches (address it as
+  `w<id>`). It is depth-first; the first match is used and `matchCount` reports how many matched.
   When nothing matches, the search runs once more after 1 s.
 - **Web content** (WKWebView, e.g. Tauri apps): `tree` reports `domIdentifier`,
   `domClassList`, `description` (aria-label), `title`, `placeholder`, `url`. WebKit builds the
@@ -101,17 +109,29 @@ All window and element commands need Accessibility (except `window list`) and fa
 Observed on the fixture (macOS 26.5, AppKit window and WKWebView window), with another app
 frontmost:
 
-- `click` (AXPress) works for AppKit and web buttons.
+- `click` (AXPress) works for AppKit and web buttons. `--action` takes only AXPress, AXConfirm,
+  AXIncrement, AXDecrement, AXPick, and AXCancel: AXRaise brings a window to the front, and
+  AXShowMenu opens a menu that can take keyboard input.
 - `type --mode value` works for AppKit and web text fields; it replaces the text. A web field
   takes the value only after `AXFocused` (DOM focus), which vscreen sets when the first write
-  does not stick.
+  does not stick. When the value still differs from `--text`, it fails with `ax_failed` (the
+  write returned an error) or `value_not_set` (the write returned success but nothing changed).
 - `type --mode keys` and `key` post events to the pid. AppKit gives them to the focused element
   of the window it treats as the app's focused window, whatever window the target is in. vscreen
   sets `AXFocused` on the target, then compares it with the app's `AXFocusedUIElement`; when they
   differ it fails with `keys_not_routable` and posts nothing, so keys never land in another
-  element. On the fixture, keys worked in the AppKit field when its window was the app's focused
-  window, and were refused for the web field and for an AppKit field in a second window.
-- `click --post` is not tested: a mouse down in a window of an inactive app may activate it.
+  element. The `AXFocused` write may already have moved focus inside the app;
+  `error.details.focusInsideApp` reports it. On the fixture, keys worked in the AppKit field when
+  its window was the app's focused window, and were refused for the web field and for an AppKit
+  field in a second window.
+- `type --mode keys` refuses control characters (tab, return, newline, escape): AppKit maps them
+  to actions that move focus or submit, so later characters could land elsewhere. Send them with
+  `vscreen key`. When the value did not change, it fails with `keys_no_effect`.
+- `key` without `--path` or `--match` goes to whatever the app has focused. It fails with
+  `target_frontmost` when the app is frontmost, because that element is the one in use.
+- `click --post` is not tested live: a mouse down in a window of an inactive app may make that
+  window key and activate the app. It runs only with `--allow-activation-risk`; check `focus` in
+  its result.
 
 ## Capture
 

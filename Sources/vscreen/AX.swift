@@ -214,12 +214,15 @@ func matches(_ terms: [MatchTerm], _ fields: ElementFields) -> Bool {
 let searchDepthLimit = 64
 let searchNodeLimit = 20000
 
-/// Depth-first search in AXChildren order over the roots; returns all matches, first first.
+/// Depth-first search in AXChildren order below each root window; returns all matches, first first.
+/// The window itself is never a candidate: a match on its title must not resolve to the window.
 func search(_ roots: [RootWindow], terms: [MatchTerm]) -> (found: [Target], visited: Int) {
     var found: [Target] = []
     var visited = 0
     for root in roots {
-        var stack: [(AXUIElement, String, Int)] = [(root.element, root.path, 0)]
+        var stack: [(AXUIElement, String, Int)] = axChildren(root.element).enumerated().reversed().map {
+            ($0.element, "\(root.path)/\($0.offset)", 1)
+        }
         while let (element, path, depth) = stack.popLast(), visited < searchNodeLimit {
             visited += 1
             let fields = readFields(element)
@@ -342,17 +345,35 @@ func pointJSON(_ point: CGPoint) -> JSONObject { ["x": Double(point.x), "y": Dou
 
 // MARK: - click
 
+/// AX actions `click --action` may perform. Everything else is refused: AXRaise brings a window
+/// to the front, and AXShowMenu opens a menu that can take keyboard input while it tracks.
+let allowedActions: [String] = ["AXPress", "AXConfirm", "AXIncrement", "AXDecrement", "AXPick", "AXCancel"]
+
 func click(_ arguments: [String]) throws -> JSONObject {
-    let options = try Options(arguments, valueOptions: ["--pid", "--path", "--match", "--window", "--action"], flagOptions: ["--post"])
+    let options = try Options(arguments, valueOptions: ["--pid", "--path", "--match", "--window", "--action"],
+                              flagOptions: ["--post", "--allow-activation-risk"])
     let pid = try requirePid(options)
+    let post = options.has("--post")
+    if post {
+        guard options.string("--action") == nil else { throw CLIError("bad_arguments", "use --action or --post, not both") }
+        guard options.has("--allow-activation-risk") else {
+            throw CLIError("activation_risk",
+                           "--post sends a mouse down to pid \(pid), which may make its window key and activate the app; pass --allow-activation-risk to accept that, or use an AX action")
+        }
+    } else if options.has("--allow-activation-risk") {
+        throw CLIError("bad_arguments", "--allow-activation-risk only applies to --post")
+    }
+    let action = options.string("--action") ?? "AXPress"
+    guard post || allowedActions.contains(action) else {
+        throw CLIError("action_not_allowed", "--action \(action) is not allowed; use one of \(allowedActions.joined(separator: ", "))")
+    }
     try requireAccessibility()
     let resolved = try requireElement(options, pid: pid)
     let target = resolved.target
     let before = focusSnapshot(pid: pid)
     var result: JSONObject = ["pid": Int(pid), "element": elementJSON(resolved)]
 
-    if options.has("--post") {
-        guard options.string("--action") == nil else { throw CLIError("bad_arguments", "use --action or --post, not both") }
+    if post {
         guard let frame = target.fields.frame else { throw CLIError("no_frame", "element \(target.path) has no AXPosition/AXSize") }
         let centre = CGPoint(x: frame.midX, y: frame.midY)
         let cursorBefore = cursorLocation()
@@ -367,7 +388,6 @@ func click(_ arguments: [String]) throws -> JSONObject {
         return result
     }
 
-    let action = options.string("--action") ?? "AXPress"
     guard target.fields.actions.contains(action) else {
         throw CLIError("action_unsupported", "element \(target.path) does not offer \(action); it offers \(target.fields.actions)")
     }
@@ -400,9 +420,23 @@ func postClick(pid: pid_t, at point: CGPoint, windowID: CGWindowID?) throws {
 
 // MARK: - type and key
 
+/// Roles that are windows. vscreen never writes AXFocused to them: a focused window becomes the
+/// app's key window and can take keyboard focus from the person at the Mac.
+let windowRoles: Set<String> = ["AXWindow", "AXSheet"]
+
+/// Refuses a target that is a window root or has a window role, before any write to it.
+func requireNotWindow(_ target: Target) throws {
+    let role = target.fields.string("AXRole")
+    guard !CFEqual(target.element, target.root.element), !windowRoles.contains(role ?? "") else {
+        throw CLIError("element_is_window",
+                       "\(target.path) is a window (\(role ?? "root")); name an element inside it with --path or --match")
+    }
+}
+
 /// Sets AXFocused on the element inside its app when it is not focused yet.
 /// This moves keyboard focus within the target app only; it does not activate the app.
-func focusInsideApp(_ target: Target) -> JSONObject {
+func focusInsideApp(_ target: Target) throws -> JSONObject {
+    try requireNotWindow(target)
     if target.fields.bool("AXFocused") == true { return ["needed": false] }
     let error = AXUIElementSetAttributeValue(target.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
     settle(0.1)
@@ -412,16 +446,26 @@ func focusInsideApp(_ target: Target) -> JSONObject {
 
 /// Key events posted to an inactive app reach the first responder of the window AppKit treats
 /// as focused, whatever window the event names. The app's AXFocusedUIElement is that element.
-/// Fails with `keys_not_routable` instead of typing into another element.
-func requireKeyRoute(_ target: Target, pid: pid_t) throws {
+/// Fails with `keys_not_routable` instead of typing into another element; the error details
+/// report the AXFocused write that already happened (`focusInsideApp`).
+func requireKeyRoute(_ target: Target, pid: pid_t, focusInsideApp focus: JSONObject) throws {
     var value: CFTypeRef?
     let error = AXUIElementCopyAttributeValue(axApplication(pid), kAXFocusedUIElementAttribute as CFString, &value)
     let focused = error == .success ? value.map { $0 as! AXUIElement } : nil
     if let focused, CFEqual(focused, target.element) { return }
     let holder = focused.map { nodeJSON(readFields($0), path: "") }
     let description = holder.map { String(decoding: jsonData($0), as: UTF8.self) } ?? "none (AXError \(error.rawValue))"
+    let moved = focus["needed"] as? Bool == true ? " AXFocused was already set on \(target.path) inside the app (see details)." : ""
     throw CLIError("keys_not_routable",
-                   "key events for pid \(pid) would reach the app's focused element, not \(target.path); focused element: \(description). Use --mode value or an AX action.")
+                   "key events for pid \(pid) would reach the app's focused element, not \(target.path); focused element: \(description). Nothing was posted.\(moved) Use --mode value or an AX action.",
+                   details: ["element": target.path, "focusInsideApp": focus, "focusedElement": holder ?? NSNull()])
+}
+
+/// The first control character (tab, return, newline, escape, ...) in `text`. AppKit maps these
+/// to key bindings such as insertTab: and insertNewline:, which move focus or submit a form, so
+/// keys typed after one could land in another element.
+func firstControlCharacter(_ text: String) -> Unicode.Scalar? {
+    text.unicodeScalars.first { $0.properties.generalCategory == .control }
 }
 
 func typeText(_ arguments: [String]) throws -> JSONObject {
@@ -430,30 +474,37 @@ func typeText(_ arguments: [String]) throws -> JSONObject {
     guard let text = options.string("--text") else { throw CLIError("bad_arguments", "--text T is required") }
     let mode = options.string("--mode") ?? "value"
     guard ["value", "keys"].contains(mode) else { throw CLIError("bad_arguments", "--mode must be value or keys") }
+    if mode == "keys", let control = firstControlCharacter(text) {
+        throw CLIError("bad_arguments",
+                       "--mode keys refuses control character U+\(String(control.value, radix: 16, uppercase: true)); it can move focus or submit. Send it with `vscreen key` (e.g. --key tab or --key return)")
+    }
     try requireAccessibility()
     let resolved = try requireElement(options, pid: pid)
     let target = resolved.target
+    try requireNotWindow(target)
     let before = focusSnapshot(pid: pid)
     let valueBefore = target.fields.valueText
     var result: JSONObject = ["pid": Int(pid), "mode": mode, "element": elementJSON(resolved)]
     let during: FocusSnapshot
+    var writeError = AXError.success
 
     if mode == "value" {
         var settable: DarwinBoolean = false
         AXUIElementIsAttributeSettable(target.element, kAXValueAttribute as CFString, &settable)
-        var error = AXUIElementSetAttributeValue(target.element, kAXValueAttribute as CFString, text as CFString)
+        writeError = AXUIElementSetAttributeValue(target.element, kAXValueAttribute as CFString, text as CFString)
         settle(0.1)
-        if error != .success || readFields(target.element).valueText != text {
+        if writeError != .success || readFields(target.element).valueText != text {
             // Some controls take a value only while focused inside their app.
-            result["focusInsideApp"] = focusInsideApp(target)
-            error = AXUIElementSetAttributeValue(target.element, kAXValueAttribute as CFString, text as CFString)
+            result["focusInsideApp"] = try focusInsideApp(target)
+            writeError = AXUIElementSetAttributeValue(target.element, kAXValueAttribute as CFString, text as CFString)
         }
         during = focusSnapshot(pid: pid)
         result["settable"] = settable.boolValue
-        result["axError"] = Int(error.rawValue)
+        result["axError"] = Int(writeError.rawValue)
     } else {
-        result["focusInsideApp"] = focusInsideApp(target)
-        try requireKeyRoute(target, pid: pid)
+        let focus = try focusInsideApp(target)
+        result["focusInsideApp"] = focus
+        try requireKeyRoute(target, pid: pid, focusInsideApp: focus)
         try postText(text, pid: pid)
         during = focusSnapshot(pid: pid)
     }
@@ -462,10 +513,20 @@ func typeText(_ arguments: [String]) throws -> JSONObject {
     result["valueBefore"] = valueBefore ?? NSNull()
     result["valueAfter"] = valueAfter ?? NSNull()
     result["changed"] = valueAfter != valueBefore
-    if mode == "keys" && valueAfter == valueBefore {
-        result["note"] = "the key events were posted to the app's focused element but the value did not change"
-    }
     result["focus"] = focusReport(before: before, during: during, after: focusSnapshot(pid: pid))
+
+    // A write that did not take is a failure; details carry the same report a success would.
+    if mode == "value" && valueAfter != text {
+        if writeError != .success {
+            throw CLIError("ax_failed", "setting AXValue on \(target.path) failed with AXError \(writeError.rawValue)", details: result)
+        }
+        if valueAfter == valueBefore {
+            throw CLIError("value_not_set", "AXValue on \(target.path) reported success but the value did not change", details: result)
+        }
+    }
+    if mode == "keys" && valueAfter == valueBefore {
+        throw CLIError("keys_no_effect", "the key events were posted to \(target.path) but its value did not change", details: result)
+    }
     return result
 }
 
@@ -535,12 +596,27 @@ func key(_ arguments: [String]) throws -> JSONObject {
     let flags = try parseModifiers(options.string("--mods"))
     try requireAccessibility()
     let resolved = try resolveElement(options, pid: pid)
+    if resolved == nil, options.string("--window") != nil {
+        throw CLIError("bad_arguments", "--window only narrows --match; name the element with --match or --path")
+    }
     let before = focusSnapshot(pid: pid)
     var result: JSONObject = ["pid": Int(pid), "key": name, "keyCode": Int(code)]
     if let resolved {
+        try requireNotWindow(resolved.target)
         result["element"] = elementJSON(resolved)
-        result["focusInsideApp"] = focusInsideApp(resolved.target)
-        try requireKeyRoute(resolved.target, pid: pid)
+        let focus = try focusInsideApp(resolved.target)
+        result["focusInsideApp"] = focus
+        try requireKeyRoute(resolved.target, pid: pid, focusInsideApp: focus)
+    } else {
+        // Without an element the key reaches whatever the app has focused. When the app is
+        // frontmost, that is the element the person at the Mac is using.
+        guard NSRunningApplication(processIdentifier: pid) != nil else {
+            throw CLIError("app_not_found", "no running app with pid \(pid)")
+        }
+        guard !before.targetActive else {
+            throw CLIError("target_frontmost",
+                           "pid \(pid) is the frontmost app, so the key would reach the element in use; name the element with --path or --match")
+        }
     }
     try postKey(pid: pid, code: code, characters: name.count == 1 ? name : nil, flags: flags)
     let during = focusSnapshot(pid: pid)

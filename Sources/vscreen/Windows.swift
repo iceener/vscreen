@@ -178,12 +178,14 @@ enum WindowMatch: String {
     case frame
 }
 
-/// The AX window element for `window`: by `_AXUIElementGetWindow`, else by identical frame.
+/// The AX window element for `window`: by `_AXUIElementGetWindow`, else by identical frame among
+/// the AX windows whose id is unknown. A window with a known, different id is never a candidate:
+/// another window of the same app with the same frame must not move instead.
 func axWindow(for window: WindowInfo) -> (element: AXUIElement, match: WindowMatch)? {
-    let candidates = axWindows(axApplication(window.pid))
-    if let element = candidates.first(where: { axWindowID($0) == window.id }) { return (element, .windowID) }
-    let byFrame = candidates.filter { axFrame($0) == window.frame }
-    return byFrame.count == 1 ? (byFrame[0], .frame) : nil
+    let candidates = axWindows(axApplication(window.pid)).map { (element: $0, id: axWindowID($0)) }
+    if let candidate = candidates.first(where: { $0.id == window.id }) { return (candidate.element, .windowID) }
+    let byFrame = candidates.filter { $0.id == nil && axFrame($0.element) == window.frame }
+    return byFrame.count == 1 ? (byFrame[0].element, .frame) : nil
 }
 
 func findWindow(_ id: Int) throws -> WindowInfo {
@@ -231,7 +233,17 @@ func windowMove(_ arguments: [String]) throws -> JSONObject {
         throw CLIError("ax_window_not_found",
                        "no AX window of pid \(window.pid) matches window \(id) (by id or frame); a window on another Space may be missing from AXWindows (onScreen: \(window.onScreen))")
     }
+    var minimized: CFTypeRef?
+    if AXUIElementCopyAttributeValue(element, kAXMinimizedAttribute as CFString, &minimized) == .success,
+       (minimized as? Bool) == true {
+        throw CLIError("window_minimized",
+                       "window \(id) is minimized; vscreen does not unminimize it, because that can bring it to the front")
+    }
     let displayFrame = CGDisplayBounds(target)
+    guard offset.x < displayFrame.width, offset.y < displayFrame.height else {
+        throw CLIError("bad_arguments",
+                       "--x and --y must be inside the target display (\(Int(displayFrame.width))x\(Int(displayFrame.height)) points)")
+    }
     let plan = placement(window: window.frame.size, display: displayFrame, offset: offset, fit: options.has("--fit"))
 
     // Move first, then shrink on the target display; a resize can shift the origin, so move again.
@@ -267,6 +279,13 @@ func windowMove(_ arguments: [String]) throws -> JSONObject {
     if let size = plan.size {
         result["resized"] = ["width": Double(size.width), "height": Double(size.height),
                              "ok": sizeError == .success]
+    }
+    // The AX writes returned, but the window did not end up as asked: that is a failure.
+    if let sizeError, sizeError != .success {
+        throw CLIError("ax_failed", "window \(id) moved, but setting AXSize failed with AXError \(sizeError.rawValue)", details: result)
+    }
+    guard moved.displayID == target else {
+        throw CLIError("not_arrived", "window \(id) did not arrive on display \(target); see details.window", details: result)
     }
     return result
 }

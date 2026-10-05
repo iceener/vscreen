@@ -3,14 +3,17 @@ import Foundation
 
 typealias JSONObject = [String: Any]
 
-/// A failure with a stable `code` for agents and a human `message`.
-struct CLIError: Error {
+/// A failure with a stable `code` for agents and a human `message`. `details` carries what
+/// already happened before the failure (plain JSON values only, so it is safe to send).
+struct CLIError: Error, @unchecked Sendable {
     let code: String
     let message: String
+    let details: JSONObject?
 
-    init(_ code: String, _ message: String) {
+    init(_ code: String, _ message: String, details: JSONObject? = nil) {
         self.code = code
         self.message = message
+        self.details = details
     }
 }
 
@@ -27,7 +30,9 @@ func emitSuccess(_ fields: JSONObject) -> Never {
 }
 
 func emitFailure(_ error: CLIError) -> Never {
-    let object: JSONObject = ["ok": false, "error": ["code": error.code, "message": error.message]]
+    var fields: JSONObject = ["code": error.code, "message": error.message]
+    if let details = error.details { fields["details"] = details }
+    let object: JSONObject = ["ok": false, "error": fields]
     FileHandle.standardOutput.write(jsonData(object) + Data("\n".utf8))
     exit(1)
 }
