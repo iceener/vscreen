@@ -1,0 +1,3 @@
+{"t":1791198124363,"pid":50443,"windows":[]}
+{"t":1791198128040,"pid":50745,"windows":[{"display": 56, "frame": {"height": 600, "width": 880, "x": 3528, "y": 1992}, "id": 175168, "onScreen": false}]}
+{"t":1791198128344,"pid":50745,"windows":[{"display": 2, "frame": {"height": 500, "width": 500, "x": 0, "y": 1192}, "id": 175171, "onScreen": false}, {"display": 56, "frame": {"height": 600, "width": 880, "x": 3528, "y": 1992}, "id": 175168, "onScreen": true}]}

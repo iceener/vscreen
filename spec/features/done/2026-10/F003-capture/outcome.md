@@ -1,0 +1,3 @@
+# Outcome
+
+`vscreen shot` and `vscreen record` capture the virtual display (default) or one window through ScreenCaptureKit; any target outside the virtual display needs `--allow-main`, and a stopped display fails with `display_not_running` instead of falling back to Adam's screen. Landed on `vscreen-dev` (merge of 283a2ec, 9fddf72, 74bbc85); it also brought the wrapper's SIGINT/SIGTERM forwarding and the daemon `proc_name` fallback after a bundle reinstall. The F004 proof used it for the paired shots, which exposed a macOS 26 ScreenCaptureKit microphone check that could show a dialog; signing with the hardened runtime (f74e68f) makes tccd deny it silently. No independent review was bought (capture is read-only and the proof exercised it live).

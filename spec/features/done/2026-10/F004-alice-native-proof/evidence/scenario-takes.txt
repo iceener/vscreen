@@ -1,0 +1,21 @@
+off-skill-bar: 0 defects
+off-model: 0 defects · compact:Model for Alice
+off-model-closed: 0 defects
+off-files: 0 defects · compact:Files
+off-files-closed: 0 defects
+off-agents: 0 defects · compact:Agents
+off-agents-closed: 0 defects
+off-request: 0 defects · sheet:Needs you
+off-request-model: 0 defects · compact:Model for Alice
+off-request-answered: 0 defects
+on-skill-bar: 0 defects
+on-model: 0 defects · compact:Model for Alice
+on-model-closed: 0 defects
+on-files: 0 defects · compact:Files
+on-files-closed: 0 defects
+on-agents: 0 defects · compact:Agents
+on-agents-closed: 0 defects
+on-request: 0 defects · sheet:Needs you
+on-request-model: 0 defects · compact:Model for Alice
+on-request-answered: 0 defects
+chat panels: evidence in tmp/debug/runs/2026-10-05T11-01-11Z-db98e029

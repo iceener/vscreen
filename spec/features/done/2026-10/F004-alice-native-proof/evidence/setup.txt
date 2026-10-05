@@ -1,0 +1,1 @@
+virtual display 56 at 3008,1692 1920x1200; main display 2; lab window origin 3528,1992

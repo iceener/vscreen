@@ -1,0 +1,45 @@
+{
+  "verdict": "PASS",
+  "scenarioExit": 0,
+  "durationSeconds": 211.0,
+  "virtualDisplay": 56,
+  "mainDisplay": 2,
+  "frontmost": {
+    "before": [
+      "com.tinyspeck.slackmacgap",
+      "Slack",
+      "82602"
+    ],
+    "after": [
+      "com.tinyspeck.slackmacgap",
+      "Slack",
+      "82602"
+    ],
+    "samples": 701,
+    "appsSeen": [
+      "Slack"
+    ],
+    "labFrontmostSamples": 0,
+    "otherAliceAppFrontmostSamples": 0,
+    "labPids": [
+      "50443",
+      "50745"
+    ]
+  },
+  "labWindow": {
+    "firstSeen": {
+      "t": 1791198124363,
+      "pid": 50443,
+      "windows": []
+    },
+    "changes": 3,
+    "everOnScreenOutsideVirtualDisplay": false,
+    "onVirtualDisplay": true
+  },
+  "shots": [
+    "shot-1-a-virtual.png",
+    "shot-1-b-main.png",
+    "shot-2-a-virtual.png",
+    "shot-2-b-main.png"
+  ]
+}
