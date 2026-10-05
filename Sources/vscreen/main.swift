@@ -11,6 +11,18 @@ let commandList: [(usage: String, summary: String)] = [
      "Create the virtual display in a background daemon. Default 1920x1200 points, HiDPI, touching the main display only at its bottom-right corner."),
     ("vscreen display status", "Show whether the daemon runs and the display is online, with its frame."),
     ("vscreen display stop", "Stop the daemon and remove the virtual display."),
+    ("vscreen window list [--pid P] [--app NAME] [--bundle ID] [--display virtual|main|ID] [--all-layers]",
+     "List windows front to back: id (CGWindowID), pid, app, bundle id, title, frame, display, layer, on-screen, order. Layer 0 only unless --all-layers."),
+    ("vscreen window move --window ID [--to virtual|main|DISPLAYID] [--x X --y Y] [--fit]",
+     "Move a window by AXPosition to X,Y points from the target display's top-left (default virtual, 40,40). --fit shrinks it to stay inside the display. Never raises or activates."),
+    ("vscreen tree --pid P [--window ID] [--depth N] [--max-nodes N]",
+     "Accessibility tree of the app's windows as JSON: path, role, title, value, description (aria-label), identifier, domIdentifier, frame, actions, children."),
+    ("vscreen click --pid P (--path PATH | --match TERMS) [--window ID] [--action AXPress | --post]",
+     "Perform an AX action on the element (default AXPress). --post sends mouse down/up at its centre to that pid only; the cursor does not move."),
+    ("vscreen type --pid P (--path PATH | --match TERMS) [--window ID] --text T [--mode value|keys]",
+     "value: set AXValue (replaces the text). keys: focus the element inside its app, then post Unicode key events to that pid only; fails with keys_not_routable when the app's focused element is another element."),
+    ("vscreen key --pid P --key NAME [--mods cmd,shift,alt,ctrl] [--path PATH | --match TERMS]",
+     "Post one key (return, tab, escape, delete, arrows, a-z, 0-9, ...) to that pid only, to its focused element; with an element, focus it first and fail with keys_not_routable if focus stays elsewhere."),
     ("vscreen shot [--display virtual|ID | --window ID] -o FILE.png [--scale 1|2] [--allow-main]",
      "Save a PNG of the virtual display (default) or one window. A target outside the virtual display needs --allow-main."),
     ("vscreen record [--display virtual|ID | --window ID] -o FILE.mov --duration SECONDS [--fps N] [--allow-main]",
@@ -49,6 +61,11 @@ struct Options {
         return value
     }
 
+    func optionalInt(_ name: String, range: ClosedRange<Int>) throws -> Int? {
+        guard values[name] != nil else { return nil }
+        return try int(name, default: 0, range: range)
+    }
+
     func has(_ flag: String) -> Bool { flags.contains(flag) }
 }
 
@@ -77,6 +94,17 @@ func route(_ arguments: [String]) throws -> JSONObject {
         }
     case "shot": return try shot(Array(arguments.dropFirst()))
     case "record": return try record(Array(arguments.dropFirst()))
+    case "window" where words.count > 1:
+        let rest = Array(arguments.dropFirst(2))
+        switch words[1] {
+        case "list": return try windowList(rest)
+        case "move": return try windowMove(rest)
+        default: break
+        }
+    case "tree": return try tree(Array(arguments.dropFirst()))
+    case "click": return try click(Array(arguments.dropFirst()))
+    case "type": return try typeText(Array(arguments.dropFirst()))
+    case "key": return try key(Array(arguments.dropFirst()))
     default: break
     }
     throw CLIError("unknown_command", "unknown command: \(arguments.joined(separator: " ")); run `vscreen help`")
