@@ -11,6 +11,10 @@ let commandList: [(usage: String, summary: String)] = [
      "Create the virtual display in a background daemon. Default 1920x1200 points, HiDPI, touching the main display only at its bottom-right corner."),
     ("vscreen display status", "Show whether the daemon runs and the display is online, with its frame."),
     ("vscreen display stop", "Stop the daemon and remove the virtual display."),
+    ("vscreen shot [--display virtual|ID | --window ID] -o FILE.png [--scale 1|2] [--allow-main]",
+     "Save a PNG of the virtual display (default) or one window. A target outside the virtual display needs --allow-main."),
+    ("vscreen record [--display virtual|ID | --window ID] -o FILE.mov --duration SECONDS [--fps N] [--allow-main]",
+     "Record a movie (H.264, no audio). Returns when the file is finalized; SIGINT/SIGTERM stop it early and cleanly."),
 ]
 
 /// Parsed `--name value` options and `--flag` switches after the command words.
@@ -71,6 +75,8 @@ func route(_ arguments: [String]) throws -> JSONObject {
             return try displayStop()
         default: break
         }
+    case "shot": return try shot(Array(arguments.dropFirst()))
+    case "record": return try record(Array(arguments.dropFirst()))
     default: break
     }
     throw CLIError("unknown_command", "unknown command: \(arguments.joined(separator: " ")); run `vscreen help`")

@@ -99,11 +99,14 @@ func removeState(ownedBy pid: pid_t) {
 }
 
 /// True when `pid` is alive and runs the vscreen executable (guards against pid reuse).
+/// A reinstall replaces the bundle and unlinks the daemon's executable; proc_pidpath then fails,
+/// so the process name is checked instead.
 func isDaemonProcess(_ pid: pid_t) -> Bool {
     guard pid > 0, kill(pid, 0) == 0 || errno == EPERM else { return false }
     var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-    guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
-    return stringFromCString(buffer).hasSuffix("/vscreen")
+    if proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 { return stringFromCString(buffer).hasSuffix("/vscreen") }
+    guard proc_name(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
+    return stringFromCString(buffer) == "vscreen"
 }
 
 // MARK: - Commands
