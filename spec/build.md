@@ -5,6 +5,7 @@
 ## Owner choices
 
 - Workers and reviewers: engine `omp`, provider `anthropic`, model `claude-opus-5-5`; workers thinking `high`, reviewers `xhigh`. Never Cursor cloud agents. No model fallback: on quota or model failure, preserve work and ask.
+- F006 group (Adam, 15:10): lead is this coordinator (Opus 5.5 xhigh); team members on `openai-codex/gpt-6.1-sol` (coordinator and worker thinking high) for tight fixes; the lead buys one Opus 5.5 (thinking high) review of the chosen candidate. Goal: refine without bloating logic.
 - Spawn `--detached` always: Herdr tab switching and GUI activity must not disturb Adam, who is using the Mac.
 - Hard rule for every job: never take Adam's focus or bring any window to the front; GUI checks use the repo fixture app or the Alice lab on the virtual display only.
 - Hard rule (Adam, 15:00/15:03): never capture Adam's main screen. Enforced in the tool: shot/record need a target (window on the virtual display preferred, or `--display virtual`) and refuse everything else; the unlock needs both `--allow-main` and `VSCREEN_ALLOW_MAIN=1` and is Adam's alone. Jobs never use it.
@@ -20,7 +21,7 @@
 
 ## NOW
 
-- Nothing active.
+- `F006-display-cleanup` (ACTIVE): group of two Sol teams (tight fix in the daemon vs observe-then-delete); no orphan virtual display after stop, crash, SIGHUP or logout; doctor reports and clears orphans.
 
 ## NEXT
 
