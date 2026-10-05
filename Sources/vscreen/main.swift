@@ -20,9 +20,9 @@ let commandList: [(usage: String, summary: String)] = [
     ("vscreen click --pid P (--path PATH | --match TERMS) [--window ID] [--action AXPress | --post]",
      "Perform an AX action on the element (default AXPress). --post sends mouse down/up at its centre to that pid only; the cursor does not move."),
     ("vscreen type --pid P (--path PATH | --match TERMS) [--window ID] --text T [--mode value|keys]",
-     "value: set AXValue (replaces the text). keys: focus the element inside its app, then post Unicode key events to that pid only."),
+     "value: set AXValue (replaces the text). keys: focus the element inside its app, then post Unicode key events to that pid only; fails with keys_not_routable when the app's focused element is another element."),
     ("vscreen key --pid P --key NAME [--mods cmd,shift,alt,ctrl] [--path PATH | --match TERMS]",
-     "Post one key (return, tab, escape, delete, arrows, a-z, 0-9, ...) to that pid only; with an element, focus it inside its app first."),
+     "Post one key (return, tab, escape, delete, arrows, a-z, 0-9, ...) to that pid only, to its focused element; with an element, focus it first and fail with keys_not_routable if focus stays elsewhere."),
 ]
 
 /// Parsed `--name value` options and `--flag` switches after the command words.

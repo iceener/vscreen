@@ -304,7 +304,12 @@ func resolveElement(_ options: Options, pid: pid_t) throws -> (target: Target, m
     guard let text = options.string("--match") else { return nil }
     let terms = try parseMatch(text)
     let roots = try rootWindows(pid: pid, windowID: try options.optionalInt("--window", range: 1...Int(UInt32.max)))
-    let result = search(roots, terms: terms)
+    var result = search(roots, terms: terms)
+    if result.found.isEmpty {
+        // WebKit builds a web view's AX tree only after the first AX request; look once more.
+        settle(1)
+        result = search(roots, terms: terms)
+    }
     guard let first = result.found.first else {
         throw CLIError("element_not_found", "no element of pid \(pid) matches \(text) (\(result.visited) nodes searched)")
     }
@@ -405,6 +410,20 @@ func focusInsideApp(_ target: Target) -> JSONObject {
     return ["needed": true, "attribute": "AXFocused", "axError": Int(error.rawValue), "focusedAfter": now ?? NSNull()]
 }
 
+/// Key events posted to an inactive app reach the first responder of the window AppKit treats
+/// as focused, whatever window the event names. The app's AXFocusedUIElement is that element.
+/// Fails with `keys_not_routable` instead of typing into another element.
+func requireKeyRoute(_ target: Target, pid: pid_t) throws {
+    var value: CFTypeRef?
+    let error = AXUIElementCopyAttributeValue(axApplication(pid), kAXFocusedUIElementAttribute as CFString, &value)
+    let focused = error == .success ? value.map { $0 as! AXUIElement } : nil
+    if let focused, CFEqual(focused, target.element) { return }
+    let holder = focused.map { nodeJSON(readFields($0), path: "") }
+    let description = holder.map { String(decoding: jsonData($0), as: UTF8.self) } ?? "none (AXError \(error.rawValue))"
+    throw CLIError("keys_not_routable",
+                   "key events for pid \(pid) would reach the app's focused element, not \(target.path); focused element: \(description). Use --mode value or an AX action.")
+}
+
 func typeText(_ arguments: [String]) throws -> JSONObject {
     let options = try Options(arguments, valueOptions: ["--pid", "--path", "--match", "--window", "--text", "--mode"], flagOptions: [])
     let pid = try requirePid(options)
@@ -434,6 +453,7 @@ func typeText(_ arguments: [String]) throws -> JSONObject {
         result["axError"] = Int(error.rawValue)
     } else {
         result["focusInsideApp"] = focusInsideApp(target)
+        try requireKeyRoute(target, pid: pid)
         try postText(text, pid: pid)
         during = focusSnapshot(pid: pid)
     }
@@ -442,22 +462,33 @@ func typeText(_ arguments: [String]) throws -> JSONObject {
     result["valueBefore"] = valueBefore ?? NSNull()
     result["valueAfter"] = valueAfter ?? NSNull()
     result["changed"] = valueAfter != valueBefore
+    if mode == "keys" && valueAfter == valueBefore {
+        result["note"] = "the key events were posted to the app's focused element but the value did not change"
+    }
     result["focus"] = focusReport(before: before, during: during, after: focusSnapshot(pid: pid))
     return result
 }
 
+/// One key down/up delivered to `pid` only. The cursor and the system key state do not change.
+func postKey(pid: pid_t, code: CGKeyCode, characters: String?, flags: CGEventFlags) throws {
+    let source = CGEventSource(stateID: .privateState)
+    for down in [true, false] {
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else {
+            throw CLIError("event_failed", "could not create a key event")
+        }
+        event.flags = flags
+        if let characters {
+            let units = Array(characters.utf16)
+            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+        }
+        event.postToPid(pid)
+    }
+}
+
 /// Unicode key events delivered to `pid` only, one key down/up per character.
 func postText(_ text: String, pid: pid_t) throws {
-    let source = CGEventSource(stateID: .privateState)
     for character in text {
-        let units = Array(String(character).utf16)
-        for down in [true, false] {
-            guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else {
-                throw CLIError("event_failed", "could not create a key event")
-            }
-            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-            event.postToPid(pid)
-        }
+        try postKey(pid: pid, code: 0, characters: String(character), flags: [])
         usleep(10_000)
     }
 }
@@ -509,19 +540,9 @@ func key(_ arguments: [String]) throws -> JSONObject {
     if let resolved {
         result["element"] = elementJSON(resolved)
         result["focusInsideApp"] = focusInsideApp(resolved.target)
+        try requireKeyRoute(resolved.target, pid: pid)
     }
-    let source = CGEventSource(stateID: .privateState)
-    for down in [true, false] {
-        guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else {
-            throw CLIError("event_failed", "could not create a key event")
-        }
-        event.flags = flags
-        if name.count == 1 {
-            let units = Array(name.utf16)
-            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-        }
-        event.postToPid(pid)
-    }
+    try postKey(pid: pid, code: code, characters: name.count == 1 ? name : nil, flags: flags)
     let during = focusSnapshot(pid: pid)
     settle()
     if let resolved { result["valueAfter"] = readFields(resolved.target.element).valueText ?? NSNull() }

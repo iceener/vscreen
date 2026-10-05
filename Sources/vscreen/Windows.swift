@@ -228,7 +228,8 @@ func windowMove(_ arguments: [String]) throws -> JSONObject {
     let window = try findWindow(id)
     let before = focusSnapshot(pid: window.pid)
     guard let (element, match) = axWindow(for: window) else {
-        throw CLIError("ax_window_not_found", "no AX window of pid \(window.pid) matches window \(id) (by id or frame)")
+        throw CLIError("ax_window_not_found",
+                       "no AX window of pid \(window.pid) matches window \(id) (by id or frame); a window on another Space may be missing from AXWindows (onScreen: \(window.onScreen))")
     }
     let displayFrame = CGDisplayBounds(target)
     let plan = placement(window: window.frame.size, display: displayFrame, offset: offset, fit: options.has("--fit"))

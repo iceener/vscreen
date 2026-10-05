@@ -3,10 +3,12 @@
 // (never key, never front), and it refuses to open on the main display.
 // With --main-window 1 it adds a second, small window near the main display's bottom-right
 // corner, also ordered back behind every other window: the target for `vscreen window move`.
+// With --web 1 it adds a WKWebView window (HTML ids, classes, aria-labels) under the first one.
 //
-// Usage: vscreen-fixture --display <CGDirectDisplayID> [--x N] [--y N] [--title T] [--exit-after SECONDS] [--main-window 1]
+// Usage: vscreen-fixture --display <CGDirectDisplayID> [--x N] [--y N] [--title T] [--exit-after SECONDS] [--main-window 1] [--web 1]
 // --x/--y are points from the display's top-left corner. Events print as JSON lines on stdout.
 import AppKit
+import WebKit
 
 func emit(_ object: [String: Any]) {
     let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
@@ -25,6 +27,7 @@ struct FixtureOptions {
     var title = "vscreen fixture"
     var exitAfter: Double = 600
     var mainWindow = false
+    var web = false
 
     init(_ arguments: [String]) {
         var index = 0
@@ -38,6 +41,7 @@ struct FixtureOptions {
             case "--title": title = value
             case "--exit-after": exitAfter = Double(value) ?? exitAfter
             case "--main-window": mainWindow = value == "1"
+            case "--web": web = value == "1"
             default: fail("bad_arguments", "unknown argument: \(arguments[index])")
             }
             index += 2
@@ -45,8 +49,31 @@ struct FixtureOptions {
     }
 }
 
+/// Test page for `--web 1`: elements carry HTML ids, classes, and aria-labels.
+let webPage = """
+<!doctype html><html><body style="font: 13px -apple-system; margin: 12px">
+<input id="web-text" class="field" aria-label="Web text" placeholder="web input" style="width: 360px">
+<p><button id="web-button" class="primary" aria-label="Web press">Press web</button></p>
+<div id="web-label" role="status" aria-label="Web status">web clicks: 0</div>
+<script>
+let clicks = 0;
+const input = document.getElementById('web-text');
+const label = document.getElementById('web-label');
+const post = (body) => window.webkit.messageHandlers.fixture.postMessage(body);
+document.getElementById('web-button').addEventListener('click', () => {
+  clicks += 1;
+  label.textContent = `web clicks: ${clicks} text: ${input.value}`;
+  post({event: 'web.click', count: clicks, text: input.value});
+});
+input.addEventListener('input', () => {
+  label.textContent = `web clicks: ${clicks} text: ${input.value}`;
+  post({event: 'web.input', text: input.value});
+});
+</script></body></html>
+"""
+
 @MainActor
-final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
+final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKScriptMessageHandler {
     let options: FixtureOptions
     var window: NSWindow?
     var mainWindow: NSWindow?
@@ -92,6 +119,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         window.orderBack(nil)
         self.window = window
         let mainWindow = options.mainWindow ? makeMainWindow() : nil
+        let webWindow = options.web ? makeWebWindow(below: cgTopLeft, height: frameSize.height) : nil
 
         // Evidence for focus checks: any key-window or activation change prints an event.
         let center = NotificationCenter.default
@@ -102,6 +130,16 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         // AXValue writes bypass the field editor and its delegate; a poll makes them visible.
         Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
             MainActor.assumeIsolated { self.pollValue() }
+        }
+        // Every key and mouse event the app receives, with its target window and the first responder.
+        NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .leftMouseUp]) { event in
+            MainActor.assumeIsolated {
+                let responder = event.window?.firstResponder.map { String(describing: type(of: $0)) } ?? ""
+                emit(["event": "input", "type": Int(event.type.rawValue), "windowNumber": event.windowNumber,
+                      "characters": event.type == .keyDown ? (event.characters ?? "") : "",
+                      "firstResponder": responder, "windowIsKey": event.window?.isKeyWindow ?? false])
+            }
+            return event
         }
 
         let screenNumber = window.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
@@ -116,11 +154,44 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             "isKey": window.isKeyWindow,
             "appActive": NSApp.isActive,
         ]
-        if let mainWindow { ready["mainWindowNumber"] = mainWindow.windowNumber }
+        if let mainWindow {
+            ready["mainWindowNumber"] = mainWindow.windowNumber
+            ready["mainWindowVisible"] = mainWindow.alphaValue > 0
+        }
+        if let webWindow { ready["webWindowNumber"] = webWindow.windowNumber }
         emit(ready)
     }
 
+    /// A WKWebView window under the main fixture window, on the same display, ordered back.
+    /// The page has an input and a button with HTML ids and aria-labels, as in a Tauri app.
+    func makeWebWindow(below topLeft: CGPoint, height: CGFloat) -> NSWindow {
+        let size = NSSize(width: 420, height: 160)
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(self, name: "fixture")
+        let webView = WKWebView(frame: NSRect(origin: .zero, size: size), configuration: configuration)
+        webView.loadHTMLString(webPage, baseURL: nil)
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
+                              styleMask: [.titled, .closable, .miniaturizable],
+                              backing: .buffered, defer: false)
+        window.title = "\(options.title) (web)"
+        window.isReleasedWhenClosed = false
+        window.contentView = webView
+        let primaryHeight = CGDisplayBounds(CGMainDisplayID()).height
+        let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
+        let webTop = topLeft.y + height + 20
+        window.setFrameOrigin(NSPoint(x: topLeft.x, y: primaryHeight - webTop - frameSize.height))
+        window.orderBack(nil)
+        return window
+    }
+
+    /// Web page events (`web.click`, `web.input`) from the page's script.
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let body = message.body as? [String: Any] { emit(body) }
+    }
+
     /// A small window near the main display's bottom-right corner, behind every other window.
+    /// It starts fully transparent and becomes opaque only when another app's window covers it,
+    /// so it never shows over Adam's work (a full-screen Space can leave it in front).
     func makeMainWindow() -> NSWindow {
         let size = NSSize(width: 300, height: 80)
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
@@ -128,6 +199,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                               backing: .buffered, defer: false)
         window.title = "\(options.title) (main)"
         window.isReleasedWhenClosed = false
+        window.alphaValue = 0
         let note = NSTextField(labelWithString: "vscreen fixture: move target")
         note.frame = NSRect(x: 20, y: 30, width: 260, height: 22)
         note.setAccessibilityIdentifier("fixture.main.label")
@@ -137,8 +209,26 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
         window.setFrameOrigin(NSPoint(x: main.maxX - frameSize.width - 60, y: 120))
         window.orderBack(nil)
+        if coveredByOtherApp(CGWindowID(window.windowNumber)) { window.alphaValue = 1 }
         mainWindow = window
         return window
+    }
+
+    /// True when one on-screen, layer-0 window of another process lies in front of `id` and
+    /// contains its whole frame.
+    func coveredByOtherApp(_ id: CGWindowID) -> Bool {
+        let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]]) ?? []
+        func frame(_ entry: [String: Any]) -> CGRect {
+            (entry[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) } ?? .null
+        }
+        guard let index = list.firstIndex(where: { $0[kCGWindowNumber as String] as? Int == Int(id) }) else { return false }
+        let own = frame(list[index])
+        return list[..<index].contains { entry in
+            entry[kCGWindowLayer as String] as? Int == 0
+                && entry[kCGWindowOwnerPID as String] as? Int != Int(getpid())
+                && frame(entry).contains(own)
+        }
     }
 
     func pollValue() {
