@@ -4,6 +4,7 @@
 
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <ApplicationServices/ApplicationServices.h>
 #include <spawn.h>
 
 NS_ASSUME_NONNULL_BEGIN
@@ -50,5 +51,8 @@ NS_ASSUME_NONNULL_BEGIN
 int responsibility_spawnattrs_setdisclaim(posix_spawnattr_t _Nullable * _Nonnull attrs, int disclaim);
 // libSystem (private): the pid TCC attributes this pid's requests to.
 pid_t responsibility_get_pid_responsible_for_pid(pid_t pid);
+
+// HIServices (private): the CGWindowID behind an AXWindow element.
+AXError _AXUIElementGetWindow(AXUIElementRef element, CGWindowID *windowID);
 
 NS_ASSUME_NONNULL_END

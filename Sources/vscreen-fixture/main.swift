@@ -1,8 +1,10 @@
 // Test fixture: one window with a text field, a button, and a label that echoes clicks and text.
 // It never activates itself: accessory policy, no activate call, the window is ordered back
 // (never key, never front), and it refuses to open on the main display.
+// With --main-window 1 it adds a second, small window near the main display's bottom-right
+// corner, also ordered back behind every other window: the target for `vscreen window move`.
 //
-// Usage: vscreen-fixture --display <CGDirectDisplayID> [--x N] [--y N] [--title T] [--exit-after SECONDS]
+// Usage: vscreen-fixture --display <CGDirectDisplayID> [--x N] [--y N] [--title T] [--exit-after SECONDS] [--main-window 1]
 // --x/--y are points from the display's top-left corner. Events print as JSON lines on stdout.
 import AppKit
 
@@ -22,6 +24,7 @@ struct FixtureOptions {
     var y: Double = 40
     var title = "vscreen fixture"
     var exitAfter: Double = 600
+    var mainWindow = false
 
     init(_ arguments: [String]) {
         var index = 0
@@ -34,6 +37,7 @@ struct FixtureOptions {
             case "--y": y = Double(value) ?? y
             case "--title": title = value
             case "--exit-after": exitAfter = Double(value) ?? exitAfter
+            case "--main-window": mainWindow = value == "1"
             default: fail("bad_arguments", "unknown argument: \(arguments[index])")
             }
             index += 2
@@ -45,6 +49,8 @@ struct FixtureOptions {
 final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let options: FixtureOptions
     var window: NSWindow?
+    var mainWindow: NSWindow?
+    var lastValue = ""
     let field = NSTextField(string: "")
     let label = NSTextField(labelWithString: "clicks: 0")
     var clicks = 0
@@ -85,9 +91,21 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         window.setFrameOrigin(NSPoint(x: cgTopLeft.x, y: primaryHeight - cgTopLeft.y - frameSize.height))
         window.orderBack(nil)
         self.window = window
+        let mainWindow = options.mainWindow ? makeMainWindow() : nil
+
+        // Evidence for focus checks: any key-window or activation change prints an event.
+        let center = NotificationCenter.default
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
+                     NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+            center.addObserver(self, selector: #selector(focusChanged(_:)), name: name, object: nil)
+        }
+        // AXValue writes bypass the field editor and its delegate; a poll makes them visible.
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            MainActor.assumeIsolated { self.pollValue() }
+        }
 
         let screenNumber = window.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-        emit([
+        var ready: [String: Any] = [
             "event": "ready",
             "pid": Int(getpid()),
             "windowNumber": window.windowNumber,
@@ -97,7 +115,43 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                       "width": Double(frameSize.width), "height": Double(frameSize.height)],
             "isKey": window.isKeyWindow,
             "appActive": NSApp.isActive,
-        ])
+        ]
+        if let mainWindow { ready["mainWindowNumber"] = mainWindow.windowNumber }
+        emit(ready)
+    }
+
+    /// A small window near the main display's bottom-right corner, behind every other window.
+    func makeMainWindow() -> NSWindow {
+        let size = NSSize(width: 300, height: 80)
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                              backing: .buffered, defer: false)
+        window.title = "\(options.title) (main)"
+        window.isReleasedWhenClosed = false
+        let note = NSTextField(labelWithString: "vscreen fixture: move target")
+        note.frame = NSRect(x: 20, y: 30, width: 260, height: 22)
+        note.setAccessibilityIdentifier("fixture.main.label")
+        window.contentView?.addSubview(note)
+        // Cocoa origin of the primary display is its bottom-left corner.
+        let main = CGDisplayBounds(CGMainDisplayID())
+        let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
+        window.setFrameOrigin(NSPoint(x: main.maxX - frameSize.width - 60, y: 120))
+        window.orderBack(nil)
+        mainWindow = window
+        return window
+    }
+
+    func pollValue() {
+        guard field.stringValue != lastValue else { return }
+        lastValue = field.stringValue
+        label.stringValue = "clicks: \(clicks) text: \(field.stringValue)"
+        emit(["event": "value", "text": field.stringValue])
+    }
+
+    @objc func focusChanged(_ note: Notification) {
+        var event: [String: Any] = ["event": note.name.rawValue]
+        if let window = note.object as? NSWindow { event["windowNumber"] = window.windowNumber }
+        emit(event)
     }
 
     @objc func press() {
@@ -106,7 +160,9 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         emit(["event": "click", "count": clicks, "text": field.stringValue])
     }
 
+    /// Field-editor input (typed keys). AXValue writes show up as `value` events instead.
     func controlTextDidChange(_ notification: Notification) {
+        lastValue = field.stringValue
         label.stringValue = "clicks: \(clicks) text: \(field.stringValue)"
         emit(["event": "text", "text": field.stringValue])
     }
