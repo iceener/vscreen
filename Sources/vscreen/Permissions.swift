@@ -5,9 +5,6 @@ import CoreGraphics
 import Foundation
 import Security
 
-/// Set in the re-executed child so it does not re-execute again.
-private let responsibleEnv = "VSCREEN_RESPONSIBLE"
-
 /// Real path of the running executable (symlinks resolved), e.g. inside vscreen.app.
 func executablePath() -> String {
     var size: UInt32 = 0
@@ -53,36 +50,37 @@ func spawnSelf(_ arguments: [String], io: SpawnIO) throws -> pid_t {
         throw CLIError("spawn_failed", "responsibility_spawnattrs_setdisclaim failed: \(String(cString: strerror(disclaim)))")
     }
 
-    var environment = ProcessInfo.processInfo.environment
-    environment[responsibleEnv] = "1"
     let argv = ([path] + arguments).map { strdup($0) } + [nil]
-    let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
-    defer {
-        argv.forEach { free($0) }
-        envp.forEach { free($0) }
-    }
+    defer { argv.forEach { free($0) } }
     var pid: pid_t = 0
-    let status = posix_spawn(&pid, path, &actions, &attributes, argv, envp)
+    let status = posix_spawn(&pid, path, &actions, &attributes, argv, environ)
     guard status == 0 else {
         throw CLIError("spawn_failed", "posix_spawn \(path): \(String(cString: strerror(status)))")
     }
     return pid
 }
 
+/// Hidden argv[1] of the re-executed child. Unlike an environment variable it does not leak
+/// into processes the child starts; it only stops a re-exec loop if the disclaim did not work.
+let reexecMarker = "__responsible"
+
 /// Re-executes this command as its own responsible process and exits with the child's status.
-/// Returns only in the child (or when already responsible).
-func runAsOwnResponsibleProcess(_ arguments: [String]) {
-    if ProcessInfo.processInfo.environment[responsibleEnv] == "1" { return }
+/// Returns only in the child, or when this process is already its own responsible process.
+func runAsOwnResponsibleProcess(_ arguments: [String], reexecuted: Bool) {
+    if responsibility_get_pid_responsible_for_pid(getpid()) == getpid() { return }
+    if reexecuted {
+        emitFailure(CLIError("spawn_failed", "the re-executed vscreen is still not its own responsible process"))
+    }
     let pid: pid_t
     do {
-        pid = try spawnSelf(arguments, io: .inherit)
+        pid = try spawnSelf([reexecMarker] + arguments, io: .inherit)
     } catch let error as CLIError {
         emitFailure(error)
     } catch {
         emitFailure(CLIError("spawn_failed", "\(error)"))
     }
-    // The wrapper outlives the child: forward SIGINT/SIGTERM so the child (e.g. `record`) stops cleanly.
-    let forwarders = [SIGINT, SIGTERM].map { number in
+    // The wrapper outlives the child: forward termination signals so the child (e.g. `record`) stops cleanly.
+    let forwarders = [SIGINT, SIGTERM, SIGHUP].map { number in
         Darwin.signal(number, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
         source.setEventHandler { kill(pid, number) }

@@ -110,12 +110,14 @@ func route(_ arguments: [String]) throws -> JSONObject {
     throw CLIError("unknown_command", "unknown command: \(arguments.joined(separator: " ")); run `vscreen help`")
 }
 
-let arguments = Array(CommandLine.arguments.dropFirst())
+var arguments = Array(CommandLine.arguments.dropFirst())
 if arguments.first == daemonCommand {
     runDisplayDaemon(Array(arguments.dropFirst()))
 }
+let reexecuted = arguments.first == reexecMarker
+if reexecuted { arguments.removeFirst() }
 if !["help", "--help", "-h"].contains(arguments.first ?? "help") {
-    runAsOwnResponsibleProcess(arguments)
+    runAsOwnResponsibleProcess(arguments, reexecuted: reexecuted)
 }
 do {
     emitSuccess(try route(arguments))

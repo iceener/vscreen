@@ -24,7 +24,8 @@ create_identity() {
   chmod 700 "$DIR"
   local tmp
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  # EXIT, not RETURN: a RETURN trap does not run when errexit ends the script, and $tmp holds the key.
+  trap "rm -rf '$tmp'" EXIT
   (umask 077 && "$OPENSSL" rand -hex 24 > "$PASS_FILE")
   local pass
   pass="$(cat "$PASS_FILE")"
@@ -50,17 +51,32 @@ EOF
   local saved=()
   while IFS= read -r line; do saved+=("$line"); done < <(user_search_list)
   security create-keychain -p "$pass" "$KC"
-  security list-keychains -d user -s "${saved[@]}"
+  # ${a[@]+...}: bash 3.2 under set -u treats an empty array as unbound.
+  security list-keychains -d user -s ${saved[@]+"${saved[@]}"}
 
   security set-keychain-settings "$KC"
   security unlock-keychain -p "$pass" "$KC"
   security import "$tmp/id.p12" -k "$KC" -P "$pass" -T /usr/bin/codesign >/dev/null
   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pass" "$KC" >/dev/null
   cp "$tmp/cert.pem" "$CERT"
+  rm -rf "$tmp"
+  trap - EXIT
   echo "created signing identity in $KC" >&2
 }
 
 [ -f "$KC" ] || create_identity
+
+# A run that stopped after create-keychain leaves no cert.pem; read it back from the keychain
+# instead of failing on every later run.
+if [ ! -f "$CERT" ]; then
+  security find-certificate -c "$CN" -p "$KC" > "$CERT.tmp" 2>/dev/null && [ -s "$CERT.tmp" ] || {
+    rm -f "$CERT.tmp"
+    echo "sign.sh: $KC has no '$CN' certificate; move $DIR away and run again (Adam then grants permissions again)" >&2
+    exit 1
+  }
+  mv "$CERT.tmp" "$CERT"
+  echo "recovered $CERT from $KC" >&2
+fi
 
 HASH="$("$OPENSSL" x509 -in "$CERT" -noout -fingerprint -sha1 | sed -e 's/.*=//' -e 's/://g')"
 security unlock-keychain -p "$(cat "$PASS_FILE")" "$KC"
@@ -69,9 +85,9 @@ security unlock-keychain -p "$(cat "$PASS_FILE")" "$KC"
 # keychain for this one call and restore the exact previous list afterwards.
 SAVED=()
 while IFS= read -r line; do SAVED+=("$line"); done < <(user_search_list)
-restore_search_list() { security list-keychains -d user -s "${SAVED[@]}"; }
+restore_search_list() { security list-keychains -d user -s ${SAVED[@]+"${SAVED[@]}"}; }
 trap restore_search_list EXIT
-security list-keychains -d user -s "${SAVED[@]}" "$KC"
+security list-keychains -d user -s ${SAVED[@]+"${SAVED[@]}"} "$KC"
 
 # Hardened runtime: without the audio-input entitlement, macOS 26 ScreenCaptureKit's microphone
 # check is denied outright instead of showing a "vscreen would like to access the microphone" dialog.

@@ -53,7 +53,17 @@ Screen & System Audio Recording. Other commands never prompt.
 | `vscreen record [--display virtual\|ID \| --window ID] -o FILE.mov --duration SECONDS [--fps N] [--allow-main]` | Record a movie (H.264, no audio). Returns when the file is finalized; SIGINT/SIGTERM stop it early and cleanly. |
 
 `display start` returns the running display when one exists (`"alreadyRunning":true`).
-`--origin X,Y` is a global position in points (top-left origin, main display at 0,0).
+`--origin X,Y` is a global position in points (top-left origin, main display at 0,0); `0,0` is
+refused because it would make the virtual display the main display.
+`display start` and `display stop` run one at a time (a lock in `~/Library/Application Support/vscreen/`);
+one waiting longer than 40 s fails with `display_busy`. Only one daemon can hold a display: a second one
+exits before it creates a display (`daemon_already_running`). A daemon failure reaches the caller with the
+daemon's own code (`virtual_display_failed`, `display_mirrored`, `display_became_main`, ...); `status` of
+a stale daemon shows it under `failure`. The daemon is identified by pid, process name and process
+start time. When its pid is alive but cannot be identified, `status` reports `daemonUnidentified:true`
+and `start`/`stop` fail with `daemon_unidentified` and keep the state file.
+The daemon watches display reconfiguration (sleep/wake, reconnects): if the virtual display becomes
+mirrored or main, it puts Adam's display back as main, or exits and removes the virtual display.
 
 ## Windows and elements
 
